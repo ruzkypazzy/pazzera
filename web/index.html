@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Pazzera — pay per listen</title>
+  <meta name="description" content="Pay-per-listen for independent artists. Every play moves USDC on Arc in under 500ms." />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a href="/" class="brand">
+      <span class="brand-mark">P</span>
+      <span class="brand-name">Pazzera</span>
+    </a>
+    <nav class="nav">
+      <a href="/">Browse</a>
+      <a href="/artist/signup">For artists</a>
+      <a href="/dashboard" id="dashboardLink" hidden>Dashboard</a>
+    </nav>
+  </header>
+
+  <main id="app">
+    <!-- views injected by router -->
+  </main>
+
+  <footer class="footer">
+    <span>Built on Arc · Settled in USDC · x402 + Gateway</span>
+    <span class="dot">·</span>
+    <a href="https://github.com/ruzkypazzy/pazzera" target="_blank" rel="noopener">Source</a>
+  </footer>
+
+  <!-- Audio element is global so view transitions don't break playback -->
+  <audio id="player" preload="metadata"></audio>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
