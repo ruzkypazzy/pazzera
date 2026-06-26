@@ -6,13 +6,15 @@ export const adminRouter = Router();
 
 adminRouter.get('/stats', (_req, res) => {
   const db = getDb();
+  const users = (db.prepare('SELECT COUNT(*) as c FROM users').get() as any).c;
   const artists = (db.prepare('SELECT COUNT(*) as c FROM artists').get() as any).c;
   const tracks = (db.prepare('SELECT COUNT(*) as c FROM tracks').get() as any).c;
   const plays = (db.prepare('SELECT COUNT(*) as c FROM plays').get() as any).c;
   const settledPlays = (db.prepare('SELECT COUNT(*) as c FROM plays WHERE settled = 1').get() as any).c;
   const totalUsdc = (db.prepare(`SELECT COALESCE(SUM(CAST(charged_usdc AS REAL)), 0) as s FROM plays WHERE settled = 1`).get() as any).s;
   res.json({
-    artists, tracks, plays, settledPlays, totalUsdc,
+    users, artists, tracks, plays, settledPlays,
+    totalUsdc,
     network: NETWORK_ID,
     explorer: ARC_EXPLORER,
   });

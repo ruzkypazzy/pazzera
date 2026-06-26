@@ -1,0 +1,20 @@
+# Cloudflare Pages configuration for Pazzera frontend
+name = "pazzera"
+compatibility_date = "2025-01-01"
+
+[build]
+  command = "npm run build"
+  output_dir = "dist"
+
+[[redirects]]
+  from = "/api/*"
+  to = "https://pazzera-api.fly.dev/api/:splat"
+  status = 200
+
+[env.production.vars]
+  VITE_PAZZERA_API = ""
+  VITE_PAZZERA_APP_ID = ""
+
+[env.preview.vars]
+  VITE_PAZZERA_API = ""
+  VITE_PAZZERA_APP_ID = ""

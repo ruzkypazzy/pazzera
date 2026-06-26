@@ -1,27 +1,25 @@
 /**
- * Circle W3S (User-Controlled Wallets) + Arc Gateway + x402 facilitator integration.
+ * Circle W3S (User-Controlled Wallets) + Arc Gateway + x402 facilitator.
  *
- * This module is the only place that talks to Circle. The rest of the codebase
- * speaks to a narrow interface:
+ * This is the only module that talks to Circle. Two surfaces:
  *
- *   createArtistWallet(email)     → provisions an embedded Circle wallet for
- *                                   an artist, returns { walletId, address }
- *   createFanWallet(email)        → provisions an embedded Circle wallet for
- *                                   a fan (or returns existing one)
- *   requestFaucetFunding(address) → requests testnet USDC from Circle's faucet
- *   verifyX402Payment(auth)       → verifies an EIP-3009 TransferWithAuthorization
- *                                   signature signed by the fan's wallet
- *   submitToGateway(auth)         → forwards signed auth to the Circle Gateway
- *                                   facilitator → returns settlement UUID
- *   getSettlementStatus(uuid)     → polls the facilitator for settlement state
- *                                   and (once settled) the on-chain batch tx
+ *   Wallet provisioning (PIN flow, fan-owned):
+ *     createUser(userId)
+ *     createUserToken(userId)             → { userToken, encryptionKey }
+ *     createUserPinWithWallets(userToken, blockchains, accountType)
+ *                                          → { challengeId } (frontend runs sdk.execute)
+ *     listWallets(userToken)              → { wallets: [{id, address, blockchain}] }
  *
- * All real on-chain integration. No mocks.
+ *   x402 payment rail:
+ *     verifyX402Payment(auth)             → EIP-712 sig recovery
+ *     submitToGateway(auth)               → POST /v1/x402/settle → settlementId
+ *     getSettlementStatus(id)             → GET /v1/x402/transfers/:id
+ *
+ * All real on-chain. No mocks.
  */
 
 import { initiateUserControlledWalletsClient } from '@circle-fin/user-controlled-wallets';
-import { createPublicClient, http, recoverTypedDataAddress, hashTypedData, formatUnits } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
+import { createPublicClient, http, recoverTypedDataAddress, formatUnits } from 'viem';
 import { randomUUID } from 'node:crypto';
 
 const API_KEY = process.env.CIRCLE_API_KEY ?? '';
@@ -36,7 +34,7 @@ const ARC_EXPLORER = process.env.ARC_EXPLORER ?? 'https://testnet.arcscan.app';
 
 const circle = initiateUserControlledWalletsClient({ apiKey: API_KEY });
 
-// viem public client for reading on-chain state (decoding submitBatch tx later)
+// viem public client (decoding submitBatch tx, reading balances)
 export const arc = createPublicClient({
   transport: http(ARC_RPC),
   chain: {
@@ -48,15 +46,15 @@ export const arc = createPublicClient({
   },
 });
 
-// USDC EIP-712 domain on Arc (FiatTokenV2_2 / TransferWithAuthorization)
-const EIP712_DOMAIN = {
+// USDC EIP-712 domain (FiatTokenV2_2 TransferWithAuthorization)
+export const EIP712_DOMAIN = {
   name: 'USDC' as const,
   version: '2' as const,
   chainId: CHAIN_ID,
   verifyingContract: USDC_ADDR,
 };
 
-const EIP712_TYPES = {
+export const EIP712_TYPES = {
   TransferWithAuthorization: [
     { name: 'from',        type: 'address' },
     { name: 'to',          type: 'address' },
@@ -67,70 +65,61 @@ const EIP712_TYPES = {
   ],
 } as const;
 
-// ─── Wallet provisioning ────────────────────────────────────
-// In W3S User-Controlled Wallets, a "user" is created server-side, then a
-// challenge is sent to the SDK on the client which the user signs in their
-// browser. We persist userId + the wallet address it produces.
+// ─── Wallet provisioning (PIN flow) ────────────────────────
 
-export async function createOrGetUser(email: string): Promise<{ userId: string }> {
-  // Idempotent: createUser returns 409 if user exists, so we swallow that.
-  try {
-    const r = await circle.createUser({ userId: email });
-    return { userId: r.data?.user?.id ?? email };
-  } catch (e: any) {
-    if (e?.response?.status === 409 || /already/i.test(String(e?.message))) {
-      return { userId: email };
-    }
-    throw e;
-  }
+export async function createUser(userId: string) {
+  const r = await circle.createUser({ userId });
+  return r.data?.user;
 }
 
-export async function createWalletForUser(userId: string, accountType: 'EOA' | 'SCA' = 'EOA') {
-  const r = await circle.createWallet({
-    userId,
-    blockchains: ['ARC-TESTNET'],
+export async function createUserToken(userId: string): Promise<{ userToken: string; encryptionKey: string }> {
+  const r = await circle.createUserToken({ userId });
+  return {
+    userToken: (r.data as any)?.userToken,
+    encryptionKey: (r.data as any)?.encryptionKey,
+  };
+}
+
+export async function createUserPinWithWallets(
+  userToken: string,
+  blockchains: string[],
+  accountType: 'EOA' | 'SCA' = 'SCA',
+): Promise<{ challengeId: string }> {
+  const r = await (circle as any).createUserPinWithWallets({
+    userToken,
+    blockchains,
     accountType,
   });
-  const wallet = r.data?.wallet;
-  if (!wallet) throw new Error('createWallet: no wallet in response');
-  return { walletId: wallet.id, address: wallet.address as `0x${string}` };
+  const challengeId = r.data?.challengeId;
+  if (!challengeId) throw new Error('createUserPinWithWallets: no challengeId in response');
+  return { challengeId };
 }
 
-export async function getOrCreateWallet(email: string) {
-  const { userId } = await createOrGetUser(email);
-  // Look up existing wallets for this user; if none, create one.
-  const list = await circle.listWallets({ userId });
-  const existing = list.data?.wallets?.find(w => w.blockchain === 'ARC-TESTNET');
-  if (existing) return { walletId: existing.id, address: existing.address as `0x${string}`, userId };
-  return await createWalletForUser(userId);
+export async function listWallets(userToken: string): Promise<{ wallets: Array<{ id: string; address: string; blockchain: string }> }> {
+  const r = await circle.listWallets({ userToken });
+  return { wallets: (r.data as any)?.wallets ?? [] };
 }
 
-// ─── Faucet ─────────────────────────────────────────────────
-// Canteen page mentions Circle faucet; the canonical URL is faucet.circle.com
-// and it supports Arc Testnet. We POST the address and let a human/automation
-// fund it. For dev, you can also self-fund via the CLI (see scripts/fund.ts).
-export async function requestFaucetFunding(address: string): Promise<void> {
-  // Best-effort: most implementations require a one-time CAPTCHA + signed
-  // message. We just open the URL for the developer.
+// ─── Faucet ────────────────────────────────────────────────
+export function requestFaucetFunding(address: string): void {
   console.log(`[faucet] request testnet USDC for ${address} at ${process.env.FAUCET_URL}`);
 }
 
-// ─── x402 auth verification ─────────────────────────────────
-// Verify the fan's EIP-3009 TransferWithAuthorization signature recovers to
-// the claimed payer address. Real verification, not a length check.
-export async function verifyX402Payment(auth: {
+// ─── x402 auth verification ────────────────────────────────
+export interface X402Auth {
   payer: string;
   payee: string;
   value: string;       // USDC base units (6 decimals)
-  validAfter: number;  // unix seconds
-  validBefore: number; // unix seconds
-  nonce: string;       // 32-byte hex
-  signature: string;   // 0x... 65 bytes
-}): Promise<{ ok: boolean; recovered?: string; reason?: string }> {
+  validAfter: number;
+  validBefore: number;
+  nonce: string;
+  signature: string;
+}
+
+export async function verifyX402Payment(auth: X402Auth): Promise<{ ok: boolean; recovered?: string; reason?: string }> {
   if (!auth.payer || !auth.payee || !auth.signature) return { ok: false, reason: 'missing fields' };
   if (BigInt(auth.value) <= 0n) return { ok: false, reason: 'non-positive value' };
   if (auth.validBefore * 1000 < Date.now()) return { ok: false, reason: 'expired' };
-
   try {
     const recovered = await recoverTypedDataAddress({
       domain: EIP712_DOMAIN,
@@ -153,18 +142,8 @@ export async function verifyX402Payment(auth: {
   }
 }
 
-// ─── Gateway facilitator ────────────────────────────────────
-// POST the signed auth to Circle's x402/settle endpoint → returns a settlement
-// UUID. The actual on-chain tx fires later when the relayer batches.
-export async function submitToGateway(auth: {
-  payer: string;
-  payee: string;
-  value: string;
-  validAfter: number;
-  validBefore: number;
-  nonce: string;
-  signature: string;
-}): Promise<{ settlementId: string }> {
+// ─── Gateway facilitator ──────────────────────────────────
+export async function submitToGateway(auth: X402Auth): Promise<{ settlementId: string }> {
   const r = await fetch(`${FACILITATOR}/v1/x402/settle`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -193,10 +172,9 @@ export async function submitToGateway(auth: {
 
 export interface SettlementStatus {
   id: string;
-  status: 'received' | 'queued' | 'submitted' | 'completed' | 'failed' | string;
+  status: string;
   batchTx?: string | null;
-  explorerUrl?: string;
-  amountUsdc?: string;
+  explorerUrl?: string | null;
 }
 
 export async function getSettlementStatus(id: string): Promise<SettlementStatus> {
@@ -207,16 +185,14 @@ export async function getSettlementStatus(id: string): Promise<SettlementStatus>
     id,
     status: data.status ?? 'unknown',
     batchTx: data.batchTx ?? null,
-    amountUsdc: data.amount ?? undefined,
+    explorerUrl: data.batchTx ? `${ARC_EXPLORER}/tx/${data.batchTx}` : null,
   };
 }
 
-// ─── Helpers ────────────────────────────────────────────────
+// ─── Helpers ───────────────────────────────────────────────
 export function usdcUnits(amountUsdc: string | number): string {
-  // Convert human USDC (e.g. "0.001") → 6-decimal base units string ("1000")
   const n = Number(amountUsdc);
   if (!Number.isFinite(n)) throw new Error('invalid amount');
-  // 6 decimals, no float fuzz: string math
   const [int, frac = ''] = String(n).split('.');
   const padded = (frac + '000000').slice(0, 6);
   return (BigInt(int) * 1_000_000n + BigInt(padded)).toString();

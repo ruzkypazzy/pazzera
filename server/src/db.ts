@@ -14,14 +14,37 @@ export function initDb(): Database.Database {
   db.pragma('foreign_keys = ON');
 
   db.exec(`
-    CREATE TABLE IF NOT EXISTS artists (
+    -- Application users (email + password). One per real person.
+    CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       email TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
       display_name TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'fan',     -- 'fan' | 'artist'
+      created_at INTEGER NOT NULL,
+      last_login_at INTEGER
+    );
+
+    -- Circle W3S wallets, linked to users. We store the circle user_id
+    -- (== email) and the wallet id/address Circle gave us.
+    CREATE TABLE IF NOT EXISTS wallets (
+      id TEXT PRIMARY KEY,
+      user_id TEXT UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      circle_user_id TEXT NOT NULL,
+      circle_wallet_id TEXT NOT NULL,
+      address TEXT NOT NULL,
+      blockchain TEXT NOT NULL DEFAULT 'ARC-TESTNET',
+      account_type TEXT NOT NULL DEFAULT 'SCA',
+      pin_setup_complete INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL
+    );
+
+    -- Artist profiles (extends a user with role='artist').
+    CREATE TABLE IF NOT EXISTS artists (
+      id TEXT PRIMARY KEY,
+      user_id TEXT UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       bio TEXT,
       avatar_url TEXT,
-      wallet_id TEXT NOT NULL,
-      wallet_address TEXT NOT NULL,
       created_at INTEGER NOT NULL
     );
 
@@ -45,18 +68,20 @@ export function initDb(): Database.Database {
     CREATE TABLE IF NOT EXISTS plays (
       id TEXT PRIMARY KEY,
       track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+      fan_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       fan_wallet_address TEXT NOT NULL,
       listened_seconds INTEGER NOT NULL,
       charged_usdc TEXT NOT NULL DEFAULT '0',
       settled INTEGER NOT NULL DEFAULT 0,
-      settlement_tx_hash TEXT,
+      settlement_id TEXT,
       skipped INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_plays_track ON plays(track_id);
-    CREATE INDEX IF NOT EXISTS idx_plays_fan ON plays(fan_wallet_address);
+    CREATE INDEX IF NOT EXISTS idx_plays_fan ON plays(fan_user_id);
     CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist_id);
+    CREATE INDEX IF NOT EXISTS idx_wallets_user ON wallets(user_id);
   `);
 
   console.log('[pazzera] db ready at', DB_PATH);
