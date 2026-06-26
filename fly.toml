@@ -1,34 +1,38 @@
-# Fly.io configuration for Pazzera backend
-app = "pazzera-api"
-primary_region = "ams"
+# fly.toml app configuration file generated for pazzera on 2026-06-26T17:17:07Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'pazzera'
+primary_region = 'jnb'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = 'Dockerfile'
+
+[deploy]
+  release_command = "node -e \"console.log('pazzera backend deployed')\""
 
 [env]
-  NODE_ENV = "production"
-  PORT = "3001"
-  PUBLIC_BASE_URL = "https://pazzera.com"
+  NODE_ENV = 'production'
+  PORT = '3001'
+  PUBLIC_BASE_URL = 'https://pazzera.com'
 
 [[mounts]]
-  source = "pazzera_data"
-  destination = "/app/data"
+  source = 'pazzera_data'
+  destination = '/app/data'
 
 [http_service]
   internal_port = 3001
   force_https = true
-  auto_stop_machines = "stop"
+  auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
 
   [http_service.concurrency]
-    type = "connections"
+    type = 'connections'
     hard_limit = 50
     soft_limit = 25
 
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "512mb"
-
-[deploy]
-  release_command = "node -e \"console.log('pazzera backend deployed')\""
+  size = 'shared-cpu-1x'
+  memory = '512mb'
