@@ -2,35 +2,39 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../db.js';
-import { verifyX402Auth, settleOnArc, type X402Authorization } from '../services/circle.js';
+import {
+  getOrCreateWallet,
+  requestFaucetFunding,
+  verifyX402Payment,
+  submitToGateway,
+  getSettlementStatus,
+  usdcUnits,
+  formatUsdc,
+  NETWORK_ID,
+  ARC_EXPLORER,
+} from '../services/circle.js';
 
 export const playRouter = Router();
 
-const fanSignupSchema = z.object({
-  email: z.string().email(),
-});
+const ARC_USDC = process.env.ARC_USDC_CONTRACT ?? '0x3600000000000000000000000000000000000000';
 
-const playEventSchema = z.object({
-  trackId: z.string(),
-  fanEmail: z.string().email(),
-  listenedSeconds: z.number().int().min(0),
-  // For free plays (skip-gated), no auth needed.
-  auth: z.any().optional(),
-});
-
-// POST /api/play/signup — fan arrives, gets an embedded wallet pre-funded
+// ─── Fan signup → embedded Circle wallet ───────────────────
 playRouter.post('/signup', async (req, res) => {
-  const parsed = fanSignupSchema.safeParse(req.body);
+  const parsed = z.object({ email: z.string().email() }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'invalid email' });
-  const { getFanWallet, fundWalletFromFaucet } = await import('../services/circle.js');
-  const wallet = await getFanWallet(parsed.data.email);
-  const funded = await fundWalletFromFaucet(wallet.address);
-  res.json({ wallet, fundedUsdc: funded });
+  const { email } = parsed.data;
+
+  const wallet = await getOrCreateWallet(email);
+  // Fire-and-forget faucet nudge (real testnet USDC funding requires the
+  // developer to call the faucet once or the fan to do it themselves).
+  requestFaucetFunding(wallet.address).catch(() => {});
+
+  res.json({ wallet, network: NETWORK_ID, usdcContract: ARC_USDC, explorer: ARC_EXPLORER });
 });
 
-// POST /api/play/start — fan says "I'm starting this track"
-// Returns the x402 challenge (402 Payment Required) with payment details.
-// Frontend then signs/authorizes via embedded wallet and posts to /api/play/confirm.
+// ─── Start play → x402 challenge (HTTP 402) ────────────────
+// Returns a typed-data payload the fan's wallet must sign with EIP-712
+// TransferWithAuthorization, then POST to /api/play/confirm with the signature.
 playRouter.post('/start', async (req, res) => {
   const { trackId, fanEmail } = req.body ?? {};
   if (!trackId || !fanEmail) return res.status(400).json({ error: 'trackId and fanEmail required' });
@@ -40,10 +44,11 @@ playRouter.post('/start', async (req, res) => {
   if (!track) return res.status(404).json({ error: 'track not found' });
 
   const artist = db.prepare('SELECT * FROM artists WHERE id = ?').get(track.artist_id) as any;
-  const { getFanWallet } = await import('../services/circle.js');
-  const fan = await getFanWallet(fanEmail);
+  if (!artist) return res.status(404).json({ error: 'artist not found' });
 
-  // Check replay cooldown — same fan, same track, last play within cooldown?
+  const fan = await getOrCreateWallet(fanEmail);
+
+  // Skip gate 1: replay cooldown
   const recent = db.prepare(`
     SELECT created_at FROM plays WHERE track_id = ? AND fan_wallet_address = ?
     ORDER BY created_at DESC LIMIT 1
@@ -60,28 +65,72 @@ playRouter.post('/start', async (req, res) => {
     });
   }
 
-  // Issue x402 challenge
+  // Build the x402 challenge — EIP-712 TransferWithAuthorization params
+  const value = usdcUnits(track.price_per_listen_usdc);
+  const nonce = '0x' + randomUUID().replace(/-/g, '').padEnd(64, '0').slice(0, 64);
+  const validAfter = Math.floor(now / 1000);
+  const validBefore = validAfter + 300; // 5 min
+
   const challenge = {
+    network: NETWORK_ID,
+    usdcContract: ARC_USDC,
     payer: fan.address,
     payee: artist.wallet_address,
-    amount: track.price_per_listen_usdc,
-    resource: trackId,
-    validForSeconds: 300,
-    nonce: randomUUID(),
+    value,                 // base units (6 decimals)
+    valueUsdc: track.price_per_listen_usdc,
+    validAfter,
+    validBefore,
+    nonce,
+    // EIP-712 typed data the frontend feeds to the wallet
+    eip712: {
+      domain: {
+        name: 'USDC',
+        version: '2',
+        chainId: Number(process.env.ARC_CHAIN_ID ?? 5042002),
+        verifyingContract: ARC_USDC,
+      },
+      types: {
+        TransferWithAuthorization: [
+          { name: 'from',        type: 'address' },
+          { name: 'to',          type: 'address' },
+          { name: 'value',       type: 'uint256' },
+          { name: 'validAfter',  type: 'uint256' },
+          { name: 'validBefore', type: 'uint256' },
+          { name: 'nonce',       type: 'bytes32' },
+        ],
+      },
+      primaryType: 'TransferWithAuthorization',
+      message: {
+        from: fan.address,
+        to: artist.wallet_address,
+        value,
+        validAfter,
+        validBefore,
+        nonce,
+      },
+    },
   };
 
-  res.json({
-    track,
-    artist,
-    skip: false,
-    challenge,
-  });
+  res.json({ track, artist, skip: false, challenge });
 });
 
-// POST /api/play/confirm — fan finished listening, send signed auth, backend settles
+// ─── Confirm play → verify EIP-712, submit to Gateway ──────
 playRouter.post('/confirm', async (req, res) => {
-  const parsed = playEventSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'invalid play event' });
+  const parsed = z.object({
+    trackId: z.string(),
+    fanEmail: z.string().email(),
+    listenedSeconds: z.number().int().min(0),
+    auth: z.object({
+      payer: z.string(),
+      payee: z.string(),
+      value: z.string(),
+      validAfter: z.number(),
+      validBefore: z.number(),
+      nonce: z.string(),
+      signature: z.string(),
+    }).optional(),
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'invalid body', details: parsed.error.flatten() });
 
   const { trackId, fanEmail, listenedSeconds, auth } = parsed.data;
   const db = getDb();
@@ -89,36 +138,44 @@ playRouter.post('/confirm', async (req, res) => {
   if (!track) return res.status(404).json({ error: 'track not found' });
 
   const artist = db.prepare('SELECT * FROM artists WHERE id = ?').get(track.artist_id) as any;
-  const { getFanWallet } = await import('../services/circle.js');
-  const fan = await getFanWallet(fanEmail);
+  const fan = await getOrCreateWallet(fanEmail);
 
-  // Skip-gate: didn't listen long enough → free play, record but don't charge
+  // Skip gate 2: didn't listen long enough → free play
   const wasSkipped = listenedSeconds < track.skip_after_seconds;
-
-  let chargedUsdc = '0';
-  let txHash: string | null = null;
-  let settled = 0;
-
-  if (!wasSkipped) {
-    if (!auth) return res.status(402).json({ error: 'payment required', track });
-    const xAuth: X402Authorization = auth;
-    const ok = verifyX402Auth(xAuth);
-    if (!ok) return res.status(402).json({ error: 'invalid authorization' });
-    chargedUsdc = xAuth.amountUsdc;
-    txHash = await settleOnArc(xAuth);
-    settled = 1;
-  }
 
   const playId = randomUUID();
   const now = Date.now();
+  let chargedUsdc = '0';
+  let settlementId: string | null = null;
+  let settled = 0;
+  let failReason: string | null = null;
+
+  if (!wasSkipped) {
+    if (!auth) return res.status(402).json({ error: 'payment required', trackId });
+
+    const verify = await verifyX402Payment(auth);
+    if (!verify.ok) {
+      failReason = verify.reason ?? 'verify failed';
+    } else {
+      try {
+        const sub = await submitToGateway(auth);
+        settlementId = sub.settlementId;
+        chargedUsdc = formatUsdc(auth.value);
+        settled = 1;
+      } catch (e: any) {
+        failReason = `submit failed: ${e?.message ?? e}`;
+      }
+    }
+  }
+
   const platformFeeBps = Number(process.env.PLATFORM_FEE_BPS ?? 0);
-  const artistAmount = (Number(chargedUsdc) * (10_000 - platformFeeBps) / 10_000).toString();
+  const artistAmount = ((Number(chargedUsdc) * (10_000 - platformFeeBps)) / 10_000).toFixed(6);
 
   db.prepare(`
     INSERT INTO plays (id, track_id, fan_wallet_address, listened_seconds,
                        charged_usdc, settled, settlement_tx_hash, skipped, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(playId, trackId, fan.address, listenedSeconds, chargedUsdc, settled, txHash, wasSkipped ? 1 : 0, now);
+  `).run(playId, trackId, fan.address, listenedSeconds, chargedUsdc, settled, settlementId, wasSkipped ? 1 : 0, now);
 
   if (settled) {
     db.prepare(`UPDATE tracks SET plays_count = plays_count + 1, earnings_usdc = printf('%.6f', earnings_usdc + ?) WHERE id = ?`)
@@ -128,22 +185,38 @@ playRouter.post('/confirm', async (req, res) => {
   }
 
   res.json({
-    ok: true,
+    ok: !failReason,
     playId,
     skipped: wasSkipped,
     charged: chargedUsdc,
-    txHash,
+    settlementId,
+    failReason,
     artistReceived: artistAmount,
     artistWallet: artist.wallet_address,
+    network: NETWORK_ID,
+    explorer: ARC_EXPLORER,
   });
 });
 
-// GET /api/play/recent/:trackId — recent plays (public, for social proof)
+// ─── Poll settlement → returns on-chain batch tx once settled
+playRouter.get('/settlement/:id', async (req, res) => {
+  try {
+    const status = await getSettlementStatus(req.params.id);
+    res.json({
+      ...status,
+      explorerUrl: status.batchTx ? `${ARC_EXPLORER}/tx/${status.batchTx}` : null,
+    });
+  } catch (e: any) {
+    res.status(502).json({ error: e?.message ?? 'failed' });
+  }
+});
+
+// ─── Recent settled plays (public) ──────────────────────────
 playRouter.get('/recent/:trackId', (req, res) => {
   const db = getDb();
   const rows = db.prepare(`
     SELECT id, fan_wallet_address, charged_usdc, settled, settlement_tx_hash, listened_seconds, created_at
     FROM plays WHERE track_id = ? AND settled = 1 ORDER BY created_at DESC LIMIT 20
   `).all(req.params.trackId);
-  res.json({ plays: rows });
+  res.json({ plays: rows, explorer: ARC_EXPLORER });
 });

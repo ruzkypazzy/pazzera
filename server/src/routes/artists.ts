@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { getDb } from '../db.js';
-import { createArtistWallet } from '../services/circle.js';
+import { getOrCreateWallet, requestFaucetFunding } from '../services/circle.js';
 
 export const artistsRouter = Router();
 
@@ -12,7 +12,6 @@ const signupSchema = z.object({
   bio: z.string().max(500).optional(),
 });
 
-// POST /api/artists/signup — create artist + embedded wallet
 artistsRouter.post('/signup', async (req, res) => {
   const parsed = signupSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -21,12 +20,11 @@ artistsRouter.post('/signup', async (req, res) => {
   const { email, displayName, bio } = parsed.data;
   const db = getDb();
 
-  // Reuse if exists
   const existing = db.prepare('SELECT * FROM artists WHERE email = ?').get(email) as any;
   if (existing) return res.json({ artist: existing });
 
-  // Create embedded wallet via Circle W3S
-  const wallet = await createArtistWallet(email);
+  const wallet = await getOrCreateWallet(email);
+  requestFaucetFunding(wallet.address).catch(() => {});
 
   const id = randomUUID();
   const now = Date.now();
@@ -39,7 +37,6 @@ artistsRouter.post('/signup', async (req, res) => {
   res.json({ artist });
 });
 
-// GET /api/artists/:id — public artist profile
 artistsRouter.get('/:id', (req, res) => {
   const db = getDb();
   const artist = db.prepare('SELECT * FROM artists WHERE id = ?').get(req.params.id) as any;

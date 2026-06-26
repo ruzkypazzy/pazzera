@@ -8,6 +8,7 @@ import { playRouter } from './routes/play.js';
 import { walletRouter } from './routes/wallet.js';
 import { dashboardRouter } from './routes/dashboard.js';
 import { adminRouter } from './routes/admin.js';
+import { signRouter } from './routes/sign.js';
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3001);
@@ -30,6 +31,7 @@ app.use('/api/play', playRouter);
 app.use('/api/wallet', walletRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/admin', adminRouter);
+app.use('/api/play/sign-challenge', signRouter);
 
 // Boot
 initDb();
