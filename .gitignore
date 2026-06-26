@@ -13,4 +13,5 @@ tracks/
 .vscode/
 .idea/
 coverage/
-*.log
+*.logserver/package-lock.json
+web/package-lock.json

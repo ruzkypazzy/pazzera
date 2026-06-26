@@ -8,6 +8,7 @@ import { artistsRouter } from './routes/artists.js';
 import { playRouter } from './routes/play.js';
 import { authRouter } from './routes/auth.js';
 import { dashboardRouter } from './routes/dashboard.js';
+import { statsRouter } from './routes/stats.js';
 import { adminRouter } from './routes/admin.js';
 
 const app = express();
@@ -34,6 +35,7 @@ app.use('/api/tracks', tracksRouter);
 app.use('/api/artists', artistsRouter);
 app.use('/api/play', playRouter);
 app.use('/api/dashboard', dashboardRouter);
+app.use('/api/stats', statsRouter);
 app.use('/api/admin', adminRouter);
 
 // Boot

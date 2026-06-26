@@ -1,24 +1,29 @@
-import { defineConfig } from 'vite';
-import { nodePolyfills } from 'vite-plugin-node-polyfills';
+import { defineConfig, loadEnv } from 'vite';
 
-export default defineConfig({
-  plugins: [nodePolyfills()],
-  define: {
-    'window.PAZZERA_API':    JSON.stringify(process.env.VITE_PAZZERA_API    ?? ''),
-    'window.PAZZERA_APP_ID': JSON.stringify(process.env.VITE_PAZZERA_APP_ID ?? ''),
-    'window.ARC_RPC_URL':    JSON.stringify(process.env.VITE_ARC_RPC_URL    ?? 'https://rpc.testnet.arc.network'),
-  },
-  server: {
-    port: 5173,
-    proxy: {
-      '/api': {
-        target: 'http://localhost:3001',
-        changeOrigin: false,
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '');
+  const apiBase = env.VITE_PAZZERA_API || 'https://pazzera.fly.dev';
+
+  return {
+    root: '.',
+    publicDir: 'public',
+    build: {
+      outDir: 'dist',
+      emptyOutDir: true,
+      sourcemap: false,
+    },
+    server: {
+      port: 5173,
+      proxy: {
+        '/api': {
+          target: apiBase,
+          changeOrigin: true,
+          secure: true,
+        },
       },
     },
-  },
-  build: {
-    outDir: 'dist',
-    sourcemap: false,
-  },
+    define: {
+      'window.PAZZERA_API': JSON.stringify(apiBase),
+    },
+  };
 });

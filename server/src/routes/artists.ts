@@ -4,6 +4,21 @@ import { optionalAuth } from '../services/auth.js';
 
 export const artistsRouter = Router();
 
+// Public catalog of artists
+artistsRouter.get('/', (_req, res) => {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT a.id, u.display_name, a.bio,
+           (SELECT COUNT(*) FROM tracks t WHERE t.artist_id = a.id AND t.published = 1) AS track_count,
+           (SELECT COALESCE(SUM(plays_count), 0) FROM tracks t WHERE t.artist_id = a.id) AS plays_count
+    FROM artists a
+    JOIN users u ON u.id = a.user_id
+    ORDER BY plays_count DESC, a.created_at DESC
+    LIMIT 50
+  `).all();
+  res.json({ artists: rows });
+});
+
 // Public artist profile
 artistsRouter.get('/:id', optionalAuth, (req, res) => {
   const db = getDb();
