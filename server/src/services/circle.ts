@@ -69,7 +69,7 @@ export const EIP712_TYPES = {
 
 export async function createUser(userId: string) {
   const r = await circle.createUser({ userId });
-  return r.data?.user;
+  return r.data;
 }
 
 export async function createUserToken(userId: string): Promise<{ userToken: string; encryptionKey: string }> {
@@ -195,7 +195,9 @@ export function usdcUnits(amountUsdc: string | number): string {
   if (!Number.isFinite(n)) throw new Error('invalid amount');
   const [int, frac = ''] = String(n).split('.');
   const padded = (frac + '000000').slice(0, 6);
-  return (BigInt(int) * 1_000_000n + BigInt(padded)).toString();
+  const intPart = int ?? '0';
+  const fracPart = padded || '0';
+  return (BigInt(intPart) * 1_000_000n + BigInt(fracPart)).toString();
 }
 
 export function formatUsdc(baseUnits: string | bigint): string {

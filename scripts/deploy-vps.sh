@@ -20,11 +20,13 @@ sudo -u root git pull
 
 echo "=== 2. Installing backend deps ==="
 cd "$SERVER_DIR"
-npm install --omit=dev
-npm install --no-save typescript@5.6 tsx@4.19
+npm install
 
 echo "=== 3. Building backend (TypeScript → JS) ==="
 npm run build
+
+echo "=== 3b. Pruning dev deps for production ==="
+npm prune --omit=dev
 
 echo "=== 4. Installing system packages: nginx, certbot, pm2 ==="
 apt-get update
