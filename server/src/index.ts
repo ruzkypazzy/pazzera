@@ -15,8 +15,10 @@ const PORT = Number(process.env.PORT ?? 3001);
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL ?? 'http://localhost:5173';
 
 app.use(cors({
-  origin: PUBLIC_BASE_URL,
+  origin: (origin, cb) => cb(null, true),  // allow any origin (frontend domains)
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['content-type', 'user-token'],
 }));
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
