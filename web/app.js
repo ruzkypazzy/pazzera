@@ -47,9 +47,13 @@ async function api(path, opts = {}) {
     ...opts,
   });
   if (!res.ok) {
-    let detail;
-    try { detail = (await res.json()).error ?? await res.text(); } catch { detail = await res.text(); }
-    throw new Error(detail || `HTTP ${res.status}`);
+    // Read body once, in either json or text form
+    let detail = `HTTP ${res.status}`;
+    try {
+      const text = await res.text();
+      try { detail = JSON.parse(text).error || detail; } catch { detail = text || detail; }
+    } catch {}
+    throw new Error(detail);
   }
   return res.json();
 }
