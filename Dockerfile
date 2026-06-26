@@ -10,7 +10,8 @@ RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt
 
 # Copy server package files first for better caching
 COPY server/package*.json ./
-RUN npm ci --omit=dev
+# Generate lockfile on the fly so npm ci works, or use npm install if no lockfile
+RUN npm install --omit=dev --no-audit --no-fund || npm install --omit=dev
 
 # Copy source
 COPY server/tsconfig.json ./
