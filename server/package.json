@@ -15,11 +15,11 @@
     "fund": "tsx scripts/fund.ts"
   },
   "dependencies": {
-    "@circle-fin/x402-batching": "^3.0.4",
-    "@circle-fin/user-controlled-wallets": "^6.0.0",
-    "@circle-fin/w3s-pw-web-sdk": "^5.0.0",
-    "@x402/core": "^2.11.0",
-    "@x402/evm": "^2.11.0",
+    "@circle-fin/x402-batching": "^3.2.0",
+    "@circle-fin/user-controlled-wallets": "^10.7.1",
+    "@circle-fin/w3s-pw-web-sdk": "^1.1.11",
+    "@x402/core": "^2.16.0",
+    "@x402/evm": "^2.16.0",
     "better-sqlite3": "^11.3.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
