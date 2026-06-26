@@ -13,28 +13,43 @@ const signupSchema = z.object({
 });
 
 artistsRouter.post('/signup', async (req, res) => {
-  const parsed = signupSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ error: 'invalid signup', details: parsed.error.flatten() });
+  try {
+    const parsed = signupSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'invalid signup', details: parsed.error.flatten() });
+    }
+    const { email, displayName, bio } = parsed.data;
+    const db = getDb();
+
+    const existing = db.prepare('SELECT * FROM artists WHERE email = ?').get(email) as any;
+    if (existing) return res.json({ artist: existing });
+
+    let wallet;
+    try {
+      wallet = await getOrCreateWallet(email);
+    } catch (e: any) {
+      console.error('[artists/signup] circle error:', e?.response?.data ?? e?.message ?? e);
+      return res.status(502).json({
+        error: 'circle wallet creation failed',
+        detail: e?.response?.data?.message ?? e?.message ?? String(e),
+      });
+    }
+
+    requestFaucetFunding(wallet.address).catch(() => {});
+
+    const id = randomUUID();
+    const now = Date.now();
+    db.prepare(`
+      INSERT INTO artists (id, email, display_name, bio, wallet_id, wallet_address, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(id, email, displayName, bio ?? null, wallet.walletId, wallet.address, now);
+
+    const artist = db.prepare('SELECT * FROM artists WHERE id = ?').get(id);
+    res.json({ artist });
+  } catch (e: any) {
+    console.error('[artists/signup] unhandled:', e);
+    res.status(500).json({ error: 'signup failed', detail: e?.message ?? String(e) });
   }
-  const { email, displayName, bio } = parsed.data;
-  const db = getDb();
-
-  const existing = db.prepare('SELECT * FROM artists WHERE email = ?').get(email) as any;
-  if (existing) return res.json({ artist: existing });
-
-  const wallet = await getOrCreateWallet(email);
-  requestFaucetFunding(wallet.address).catch(() => {});
-
-  const id = randomUUID();
-  const now = Date.now();
-  db.prepare(`
-    INSERT INTO artists (id, email, display_name, bio, wallet_id, wallet_address, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(id, email, displayName, bio ?? null, wallet.walletId, wallet.address, now);
-
-  const artist = db.prepare('SELECT * FROM artists WHERE id = ?').get(id);
-  res.json({ artist });
 });
 
 artistsRouter.get('/:id', (req, res) => {
