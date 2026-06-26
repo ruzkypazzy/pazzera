@@ -1,6 +1,6 @@
 # Fly.io configuration for Pazzera backend
 app = "pazzera-api"
-primary_region = "iad"
+primary_region = "ams"
 
 [build]
   dockerfile = "Dockerfile"
