@@ -9,7 +9,8 @@
     "build": "vite build",
     "preview": "vite preview --port 5173"
   },
-  "devDependencies": {
-    "vite": "^5.4.0"
+  "dependencies": {
+    "vite": "^5.4.0",
+    "vite-plugin-node-polyfills": "^0.22.0"
   }
 }
