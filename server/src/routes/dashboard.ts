@@ -30,7 +30,7 @@ dashboardRouter.get('/', requireAuth, (req, res) => {
   `).all(artist.id);
 
   res.json({
-    artist: { ...artist, ...user },
+    artist: { ...artist, ...(user as object) },
     wallet,
     tracks,
     totals: { plays: totalPlays, earningsUsdc: totalEarnings.toFixed(6) },
