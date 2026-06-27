@@ -52,11 +52,19 @@ async function main() {
     console.error(JSON.stringify(pkJson, null, 2));
     process.exit(1);
   }
-  console.log('2. Fetched Circle entity public key.\n');
+  console.log('2. Fetched Circle entity public key (length=' + publicKey.length + ').');
+  console.log('   First 80 chars: ' + publicKey.slice(0, 80).replace(/\n/g, '\\n'));
+  console.log('');
 
-  // 3. Encrypt
+  // 3. Encrypt — normalize public key to PEM format if it's PKIX JSON
+  let pemKey = publicKey;
+  if (!pemKey.includes('-----BEGIN')) {
+    // Circle sometimes returns raw base64 SPKI; wrap in PEM headers
+    const lines = pemKey.match(/.{1,64}/g) ?? [pemKey];
+    pemKey = `-----BEGIN PUBLIC KEY-----\n${lines.join('\n')}\n-----END PUBLIC KEY-----\n`;
+  }
   const ciphertext = publicEncrypt(
-    { key: publicKey, padding: 6, oaepHash: 'sha256' },  // RSA_PKCS1_OAEP_PADDING with SHA-256
+    { key: pemKey, padding: 6, oaepHash: 'sha256' },  // RSA_PKCS1_OAEP_PADDING with SHA-256
     Buffer.from(secret, 'utf8'),
   );
   const ciphertextB64 = ciphertext.toString('base64');
