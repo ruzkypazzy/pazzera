@@ -69,6 +69,44 @@ debugRouter.get('/llm', async (_req, res) => {
   }
 });
 
+/**
+ * Test LLM with a specific base URL. Useful when the configured URL fails.
+ * GET /api/debug/llm-test?base=https://api.minimax.chat/v1&model=MiniMax-M3
+ * Uses the same LLM_API_KEY. Returns the full request/response for diagnosis.
+ */
+debugRouter.get('/llm-test', async (req, res) => {
+  const apiKey = process.env.LLM_API_KEY ?? '';
+  if (!apiKey) return res.status(503).json({ ok: false, error: 'LLM_API_KEY unset' });
+  const base = String(req.query.base ?? '');
+  const model = String(req.query.model ?? 'MiniMax-M3');
+  if (!base) return res.status(400).json({ ok: false, error: '?base=... required' });
+
+  const results: any = { base, model, attempts: [] };
+  const candidates = ['/chat/completions', '/v1/chat/completions'];
+  for (const path of candidates) {
+    const url = base.endsWith('/') ? `${base.replace(/\/$/, '')}${path === '/v1/chat/completions' ? path : path}` : `${base}${path === '/v1/chat/completions' ? path : '/chat/completions'}`;
+    // Simpler: try the explicit URL
+    const tryUrl = base.includes('chat/completions') ? base : `${base.replace(/\/$/, '')}/chat/completions`;
+    try {
+      const r = await fetch(tryUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({ model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 5 }),
+      });
+      const text = await r.text();
+      results.attempts.push({ url: tryUrl, status: r.status, body: text.slice(0, 400) });
+      if (r.ok) {
+        results.ok = true;
+        results.workingUrl = tryUrl;
+        break;
+      }
+    } catch (e: any) {
+      results.attempts.push({ url: tryUrl, error: e?.message ?? String(e) });
+    }
+  }
+  res.json(results);
+});
+
 debugRouter.get('/circle', async (_req, res) => {
   const apiKey = process.env.CIRCLE_API_KEY ?? '';
   const result: any = { hasKey: !!apiKey, keyLength: apiKey.length };
