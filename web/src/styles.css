@@ -67,15 +67,10 @@ img { display: block; max-width: 100%; }
   letter-spacing: -0.02em;
 }
 .brand-logo {
-  width: 32px;
-  height: 32px;
-  border-radius: 6px;
-}
-.brand-name {
-  background: linear-gradient(135deg, #fff 0%, #b3b3b3 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  width: 160px;
+  height: 48px;
+  object-fit: contain;
+  display: block;
 }
 .navlinks {
   display: flex;
