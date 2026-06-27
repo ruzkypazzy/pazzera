@@ -61,7 +61,8 @@ export function initDb(): Database.Database {
       circle_encryption_key_enc TEXT,
       created_at INTEGER NOT NULL,
       last_balance_check_at INTEGER,
-      cached_balance_usdc TEXT
+      cached_balance_usdc TEXT,
+      updated_at INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS password_resets (
@@ -86,6 +87,7 @@ export function initDb(): Database.Database {
     CREATE TABLE IF NOT EXISTS artists (
       id TEXT PRIMARY KEY,
       user_id TEXT UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      display_name TEXT,
       bio TEXT,
       avatar_url TEXT,
       cover_image_url TEXT,
@@ -277,6 +279,14 @@ export function initDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_track_splits_track ON track_royalty_splits(track_id);
     CREATE INDEX IF NOT EXISTS idx_agent_runs_type ON agent_runs(agent_type, created_at DESC);
   `);
+
+
+  // ── Safe migrations for existing databases ─────────────────
+  // SQLite doesn't support IF NOT EXISTS on ALTER TABLE, so we catch the error.
+  const safeAlter = (sql: string) => { try { db.exec(sql); } catch {} };
+  safeAlter('ALTER TABLE artists ADD COLUMN display_name TEXT');
+  safeAlter('ALTER TABLE wallets ADD COLUMN updated_at INTEGER');
+  // ────────────────────────────────────────────────────────────
 
   console.log('[pazzera] db ready at', DB_PATH);
   return db;
