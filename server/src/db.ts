@@ -256,6 +256,20 @@ export function initDb(): Database.Database {
     );
 
     CREATE INDEX IF NOT EXISTS idx_fan_agent_profiles_enabled ON fan_agent_profiles(enabled);
+
+    -- ============ FAUCET CLAIMS ============
+    CREATE TABLE IF NOT EXISTS faucet_claims (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      address TEXT NOT NULL,
+      amount_usdc TEXT NOT NULL,
+      tx_hash TEXT,
+      success INTEGER NOT NULL DEFAULT 0,
+      error TEXT,
+      before_balance_usdc TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_faucet_claims_user ON faucet_claims(user_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_pending_submissions_status ON pending_submissions(status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_pending_submissions_artist ON pending_submissions(artist_user_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_play_splits_play ON play_royalty_splits(play_id);

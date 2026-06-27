@@ -15,6 +15,7 @@ import { statsRouter } from './routes/stats.js';
 import { adminRouter } from './routes/admin.js';
 import { agentRouter } from './routes/agent.js';
 import { curatorRouter } from './routes/curator.js';
+import { faucetRouter } from './routes/faucet.js';
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3001);
@@ -91,6 +92,7 @@ app.use('/api/stats', statsRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/agent', agentRouter);
 app.use('/api/curator', curatorRouter);
+app.use('/api/faucet', faucetRouter);
 
 // 404 + error handlers — never leak stack traces to client
 app.use((req, res) => {

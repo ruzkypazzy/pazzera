@@ -96,8 +96,9 @@ export async function createUserPinWithWallets(
 }
 
 export async function listWallets(userToken: string): Promise<{ wallets: Array<{ id: string; address: string; blockchain: string }> }> {
-  const r = await circle.listWallets({ userToken });
-  return { wallets: (r.data as any)?.wallets ?? [] };
+  // Circle SDK v10.x wrapper: listWallets({ userToken, ... }) — SDK class wrapper takes a filter object
+  const r = await (circle as any).listWallets({ userToken });
+  return { wallets: (r?.data as any)?.wallets ?? [] };
 }
 
 // ─── Faucet ────────────────────────────────────────────────

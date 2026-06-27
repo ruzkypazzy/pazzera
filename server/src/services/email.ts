@@ -86,6 +86,20 @@ export async function sendEmail(msg: EmailMessage): Promise<EmailResult> {
 
 export function emailTemplates() {
   return {
+    verifyEmail: (displayName: string, code: string) => ({
+      subject: 'Your Pazzera verification code',
+      html: `
+        <div style="font-family:-apple-system,sans-serif;max-width:480px;margin:0 auto;padding:24px;">
+          <h1 style="font-size:24px;margin:0 0 16px;">Welcome to Pazzera, ${esc(displayName)}!</h1>
+          <p>Enter this code on the verification page to confirm your email address:</p>
+          <div style="background:#1a1a1a;color:#1db954;font-size:32px;font-weight:800;letter-spacing:6px;padding:20px;text-align:center;border-radius:8px;margin:24px 0;">
+            ${esc(code)}
+          </div>
+          <p style="color:#888;font-size:13px;">This code expires in 24 hours.</p>
+          <p style="color:#888;font-size:13px;margin-top:32px;">If you didn't sign up for Pazzera, ignore this email.</p>
+        </div>
+      `,
+    }),
     verification: (verifyUrl: string, displayName: string) => ({
       subject: 'Verify your Pazzera email',
       html: `

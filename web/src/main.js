@@ -712,9 +712,25 @@ router.on('/account', async () => {
           </div>
         ` : `
           <div class="empty-card">
-            <p>No wallet yet. The wallet is normally provisioned at signup. <button class="btn btn-ghost btn-sm" onclick="Pazzera.retryWallet()">Try again</button></p>
+            <p><strong>Wallet not provisioned yet.</strong></p>
+            <p class="muted">Circle's testnet setup didn't complete during signup. Tap below to retry — it's a 5-second fix.</p>
+            <div class="wallet-actions">
+              <button class="btn btn-primary" onclick="Pazzera.retryWallet()">Provision wallet now</button>
+            </div>
           </div>
         `}
+      </section>
+
+      <!-- Fan Agent + Faucet card (everyone) -->
+      <section class="account-section">
+        <h2>🤖 Fan Agent & Faucet</h2>
+        <p class="muted muted-sm">The Fan Agent searches Pazzera and pays artists on your behalf from your wallet. The faucet tops up testnet USDC so you can try it.</p>
+        <div class="wallet-actions" style="margin-top:12px;flex-wrap:wrap;gap:8px;">
+          <a href="/agent" data-link class="btn btn-primary">🎧 Open Fan Agent</a>
+          <button class="btn btn-ghost" onclick="Pazzera.claimFaucet()">💧 Claim testnet USDC</button>
+          <a href="https://faucet.circle.com" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">External faucet ↗</a>
+        </div>
+        <div id="faucet-status" class="muted small" style="margin-top:8px;"></div>
       </section>
 
       ${artist ? html`
@@ -1346,7 +1362,42 @@ window.Pazzera = {
   enable2fa: () => toast('2FA setup coming soon — for now password + email is sufficient', 'info'),
   disable2fa: () => toast('2FA disable coming soon', 'info'),
   setupPin: () => router.go('/onboarding/pin'),
-  retryWallet: () => router.go('/account'),
+  retryWallet: async () => {
+    const btn = event?.target;
+    if (btn) { btn.disabled = true; btn.textContent = 'Provisioning…'; }
+    try {
+      const res = await api('/api/auth/retry-wallet', { method: 'POST' });
+      if (res.walletAddress) {
+        toast('Wallet ready! Continue to PIN setup.', 'success');
+      } else if (res.pinRequired) {
+        toast('Circle PIN required to finalize wallet', 'info');
+      } else {
+        toast('Wallet provisioning finished', 'success');
+      }
+      if (res.nextStep) {
+        setTimeout(() => router.go(res.nextStep), 500);
+      } else {
+        router.render();
+      }
+    } catch (e) {
+      toast('Retry failed: ' + (e.message ?? 'unknown'), 'error');
+      if (btn) { btn.disabled = false; btn.textContent = 'Try again'; }
+      console.error('[retryWallet]', e);
+    }
+  },
+  claimFaucet: async () => {
+    const btn = event?.target;
+    if (btn) { btn.disabled = true; btn.textContent = 'Requesting…'; }
+    try {
+      const res = await api('/api/faucet/claim', { method: 'POST' });
+      toast(`Sent ${res.amountUsdc} USDC to your wallet. tx: ${(res.txHash ?? '').slice(0, 10)}…`, 'success', 8000);
+      setTimeout(() => router.render(), 1500);
+    } catch (e) {
+      const detail = e.body?.detail ?? e.message ?? 'unknown';
+      toast(`Faucet: ${detail}`, 'error', 10000);
+      if (btn) { btn.disabled = false; btn.textContent = '💧 Claim testnet USDC'; }
+    }
+  },
 
   fanAgentChat: () => {
     const input = $('#fan-agent-input');

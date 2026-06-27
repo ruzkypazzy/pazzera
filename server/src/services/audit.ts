@@ -22,6 +22,8 @@ export type AuditAction =
   | 'profile_updated'
   | 'wallet_provisioned'
   | 'wallet_pin_completed'
+  | 'wallet_retry'
+  | 'faucet_claim'
   | 'play_charged'
   | 'account_deleted';
 

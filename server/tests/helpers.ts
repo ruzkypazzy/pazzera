@@ -39,7 +39,7 @@ export function buildApp(): TestApp {
 export function clearDb() {
   const db = initDb() as Database.Database;
   const tables = [
-    'agent_runs', 'track_royalty_splits', 'play_royalty_splits',
+    'faucet_claims', 'agent_runs', 'track_royalty_splits', 'play_royalty_splits',
     'pending_submissions', 'fan_agent_profiles',
     'audit_log', 'rate_limits', 'follows', 'uploads',
     'plays', 'tracks', 'artists', 'wallets',

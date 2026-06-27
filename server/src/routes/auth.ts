@@ -140,13 +140,36 @@ authRouter.post('/signup', authLimiters.signup, async (req, res) => {
     audit(req, 'signup', { userId, role });
 
     // Send welcome email with wallet + faucet link (async, don't block)
+    let emailPreviewUrl: string | null = null;
     if (walletAddress) {
       const tpl = emailTemplates().welcomeWithWallet(
         displayName,
         walletAddress,
         `https://faucet.circle.com?address=${walletAddress}`,
       );
-      sendEmail({ to: email, ...tpl }).catch(e => console.error('[email] welcome send failed:', e));
+      sendEmail({ to: email, ...tpl }).then((r) => {
+        if (r.previewUrl) {
+          console.log('[email] welcome preview:', r.previewUrl);
+          emailPreviewUrl = r.previewUrl;
+        }
+      }).catch(e => console.error('[email] welcome send failed:', e));
+    }
+
+    // Always send a verification code so the user can unlock the dashboard features
+    let verifyPreviewUrl: string | null = null;
+    try {
+      const code = String(Math.floor(100000 + Math.random() * 900000));
+      const expires = Date.now() + 24 * 60 * 60 * 1000;
+      db.prepare(`UPDATE users SET email_verification_token = ?, email_verification_expires_at = ? WHERE id = ?`)
+        .run(code, expires, userId);
+      const tpl = emailTemplates().verifyEmail(displayName, code);
+      const r = await sendEmail({ to: email, ...tpl });
+      if (r.previewUrl) {
+        console.log('[email] verify preview:', r.previewUrl);
+        verifyPreviewUrl = r.previewUrl;
+      }
+    } catch (e) {
+      console.error('[email] verify send failed:', e);
     }
 
     const user = db.prepare(`
@@ -159,6 +182,7 @@ authRouter.post('/signup', authLimiters.signup, async (req, res) => {
       challengeId,
       userToken,
       encryptionKey,
+      emailPreviewUrl: verifyPreviewUrl, // ethereal preview URL (visible when SMTP not configured)
     });
   } catch (e: any) {
     console.error('[auth/signup]', e);
@@ -287,4 +311,113 @@ authRouter.post('/refresh-circle-token', requireAuth, async (req, res) => {
     console.error('[auth/refresh-circle-token]', e);
     res.status(502).json({ error: 'failed to refresh circle token', detail: e?.message ?? String(e) });
   }
+});
+
+/**
+ * Retry wallet provisioning for a user whose signup didn't complete the
+ * Circle W3S flow (e.g. network blip during signup). Creates a Circle user,
+ * token, and PIN challenge — same flow as signup, but for an existing user.
+ */
+authRouter.post('/retry-wallet', requireAuth, async (req, res) => {
+  const db = getDb();
+  const session = (req as any).session;
+  const email = session.email;
+
+  let challengeId: string | null = null;
+  let userToken: string | null = null;
+  let encryptionKey: string | null = null;
+  let walletId: string | null = null;
+  let walletAddress: string | null = null;
+  const steps: string[] = [];
+
+  try {
+    await createUser(email);
+    steps.push('createUser ok');
+    const t = await createUserToken(email);
+    userToken = t.userToken;
+    encryptionKey = t.encryptionKey;
+    steps.push('createUserToken ok');
+    const pin = await createUserPinWithWallets(userToken, ['ARC-TESTNET'], 'SCA');
+    challengeId = pin.challengeId;
+    steps.push('createUserPinWithWallets ok (challengeId issued)');
+  } catch (e: any) {
+    console.error('[auth/retry-wallet] circle error:', e?.response?.data ?? e?.message ?? e);
+    return res.status(502).json({
+      error: 'circle provisioning failed',
+      detail: e?.response?.data?.message ?? e?.message ?? String(e),
+      steps,
+    });
+  }
+
+  // List wallets after challenge (some wallets get created on PIN completion,
+  // but try anyway)
+  try {
+    const list = await listWallets(userToken);
+    const w = list.wallets?.[0];
+    if (w) {
+      walletId = w.id;
+      walletAddress = w.address;
+      steps.push(`listWallets ok (${w.address})`);
+    } else {
+      steps.push('listWallets ok but empty — wallet is created on PIN completion');
+    }
+  } catch (e: any) {
+    steps.push(`listWallets failed: ${e?.message ?? e}`);
+  }
+
+  // Upsert wallet row
+  const existing = db.prepare(`SELECT id FROM wallets WHERE user_id = ?`).get(session.userId) as any;
+  const now = Date.now();
+  if (existing && walletId && walletAddress) {
+    db.prepare(`
+      UPDATE wallets SET circle_user_id = ?, circle_wallet_id = ?, address = ?,
+                         pin_setup_complete = ?, circle_user_token_enc = ?, circle_encryption_key_enc = ?
+      WHERE user_id = ?
+    `).run(email, walletId, walletAddress, challengeId ? 0 : 1,
+           userToken ? encryptString(userToken) : null,
+           encryptionKey ? encryptString(encryptionKey) : null, session.userId);
+  } else if (walletId && walletAddress) {
+    db.prepare(`
+      INSERT INTO wallets (id, user_id, circle_user_id, circle_wallet_id, address, blockchain, account_type,
+                           pin_setup_complete, circle_user_token_enc, circle_encryption_key_enc, created_at)
+      VALUES (?, ?, ?, ?, ?, 'ARC-TESTNET', 'SCA', ?, ?, ?, ?)
+    `).run(
+      randomUUID(), session.userId, email, walletId, walletAddress,
+      challengeId ? 0 : 1,
+      userToken ? encryptString(userToken) : null,
+      encryptionKey ? encryptString(encryptionKey) : null,
+      now,
+    );
+  } else {
+    // No wallet yet (PIN not completed) — store the credentials so PIN setup can proceed
+    if (existing) {
+      db.prepare(`
+        UPDATE wallets SET circle_user_token_enc = ?, circle_encryption_key_enc = ? WHERE user_id = ?
+      `).run(userToken ? encryptString(userToken) : null,
+             encryptionKey ? encryptString(encryptionKey) : null, session.userId);
+    } else {
+      db.prepare(`
+        INSERT INTO wallets (id, user_id, circle_user_id, address, blockchain, account_type,
+                             pin_setup_complete, circle_user_token_enc, circle_encryption_key_enc, created_at)
+        VALUES (?, ?, ?, 'pending', 'ARC-TESTNET', 'SCA', 0, ?, ?, ?)
+      `).run(
+        randomUUID(), session.userId, email,
+        userToken ? encryptString(userToken) : null,
+        encryptionKey ? encryptString(encryptionKey) : null,
+        now,
+      );
+    }
+    steps.push('wallet row inserted with placeholder address (awaiting PIN)');
+  }
+
+  audit(req, 'wallet_retry', { userId: session.userId, metadata: { steps } });
+
+  res.json({
+    ok: true,
+    challengeId,
+    walletAddress,
+    pinRequired: !!challengeId,
+    nextStep: challengeId ? '/onboarding/pin' : null,
+    steps,
+  });
 });
