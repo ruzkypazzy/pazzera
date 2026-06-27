@@ -65,13 +65,18 @@ const FROM = process.env.SMTP_FROM ?? 'Pazzera <noreply@pazzera.com>';
 export async function sendEmail(msg: EmailMessage): Promise<EmailResult> {
   try {
     const t = await getTransport();
-    const info = await t.sendMail({
+    // 8s hard timeout so a hung SMTP server can't block the request
+    const sendPromise = t.sendMail({
       from: FROM,
       to: msg.to,
       subject: msg.subject,
       html: msg.html,
       text: msg.text ?? msg.html.replace(/<[^>]+>/g, ''),
     });
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('email send timed out after 8s')), 8000),
+    );
+    const info = await Promise.race([sendPromise, timeoutPromise]);
     if (usingEthereal) {
       const previewUrl = nodemailer.getTestMessageUrl(info) || undefined;
       console.log(`[email] preview: ${previewUrl}`);

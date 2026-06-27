@@ -41,7 +41,7 @@ interface CircleResponse<T = any> {
   errorCode?: number;
 }
 
-async function circleFetch<T = any>(path: string, opts: { method?: string; body?: any; headers?: Record<string, string> } = {}): Promise<CircleResponse<T>> {
+async function circleFetch<T = any>(path: string, opts: { method?: string; body?: any; headers?: Record<string, string>; timeoutMs?: number } = {}): Promise<CircleResponse<T>> {
   const apiKey = API_KEY();
   if (!apiKey) return { ok: false, status: 503, error: 'CIRCLE_API_KEY not set' };
 
@@ -52,12 +52,18 @@ async function circleFetch<T = any>(path: string, opts: { method?: string; body?
     ...(opts.headers ?? {}),
   };
 
+  const timeoutMs = opts.timeoutMs ?? 8000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
   try {
     const r = await fetch(url, {
       method: opts.method ?? 'POST',
       headers,
       body: opts.body ? JSON.stringify(opts.body) : undefined,
+      signal: controller.signal,
     });
+    clearTimeout(timer);
     const text = await r.text();
     let json: any = null;
     try { json = JSON.parse(text); } catch {}
@@ -71,6 +77,10 @@ async function circleFetch<T = any>(path: string, opts: { method?: string; body?
     }
     return { ok: true, status: r.status, data: json?.data ?? json };
   } catch (e: any) {
+    clearTimeout(timer);
+    if (e?.name === 'AbortError') {
+      return { ok: false, status: 504, error: `Circle API timed out after ${timeoutMs}ms` };
+    }
     return { ok: false, status: 500, error: e?.message ?? String(e) };
   }
 }
