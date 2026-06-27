@@ -67,8 +67,8 @@ img { display: block; max-width: 100%; }
   letter-spacing: -0.02em;
 }
 .brand-logo {
-  width: 160px;
-  height: 48px;
+  width: 180px;
+  height: 86px;
   object-fit: contain;
   display: block;
 }
