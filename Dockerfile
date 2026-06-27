@@ -31,9 +31,8 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/scripts ./scripts
 
-# Persistent data dirs
+# Persistent data dirs (attach Railway Volume at /app/data via dashboard)
 RUN mkdir -p /app/data /app/tracks
-VOLUME ["/app/data"]
 
 ENV NODE_ENV=production
 ENV PORT=3001
