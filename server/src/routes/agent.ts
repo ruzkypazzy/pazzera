@@ -30,28 +30,10 @@ agentRouter.post('/chat', async (req, res) => {
   const session = (req as any).session;
   const userId = session.userId;
 
-  // Decrypt the fan's Circle userToken from the wallet row (needed for x402 sign)
-  const db = getDb();
-  const wallet = db.prepare(`
-    SELECT circle_user_token_enc, circle_encryption_key_enc
-    FROM wallets WHERE user_id = ?
-  `).get(userId) as any;
-
-  let circleUserToken: string | undefined;
-  if (wallet?.circle_user_token_enc) {
-    try {
-      circleUserToken = decryptString(wallet.circle_user_token_enc);
-    } catch (e) {
-      console.error('[agent/chat] failed to decrypt userToken:', e);
-      // Continue without — agent will surface "PIN setup needed" error
-    }
-  }
-
   try {
     const result = await runFanAgent({
       userId,
       userMessage: parsed.data.message,
-      circleUserToken,
     });
     res.json(result);
   } catch (e: any) {

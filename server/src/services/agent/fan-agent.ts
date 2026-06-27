@@ -138,7 +138,6 @@ export interface FanAgentResult {
 export async function runFanAgent(args: {
   userId: string;
   userMessage: string;
-  circleUserToken?: string; // optional — if missing, agent can't pay, will explain
 }): Promise<FanAgentResult> {
   const db = getDb();
   const start = Date.now();
@@ -208,9 +207,9 @@ export async function runFanAgent(args: {
       return JSON.stringify({ error: `over budget — need ${priceUsdc} USDC, only ${remaining.toFixed(6)} left` });
     }
 
-    if (!args.circleUserToken) {
+    if (!args.userId) {
       return JSON.stringify({
-        error: 'cannot sign payment — fan needs to complete Circle PIN setup first',
+        error: 'cannot sign payment — fan is not signed in',
       });
     }
 
@@ -226,12 +225,15 @@ export async function runFanAgent(args: {
     const fanWallet = db.prepare(`SELECT address FROM wallets WHERE user_id = ?`).get(args.userId) as any;
     if (!fanWallet) return JSON.stringify({ error: 'fan has no wallet' });
 
-    // Use Circle SDK to sign the EIP-712 message
-    // (Circle W3S exposes a signTypedData call we use in-server)
+    // Sign EIP-712 with Circle DCW signTypedData (server-side, no userToken needed)
     let signature: string;
     try {
+      const fanWalletRow = db.prepare(`SELECT circle_wallet_id FROM wallets WHERE user_id = ?`).get(args.userId) as any;
+      if (!fanWalletRow?.circle_wallet_id) {
+        return JSON.stringify({ error: 'fan wallet not provisioned — sign up first' });
+      }
       signature = await signTransferWithAuth({
-        userToken: args.circleUserToken,
+        walletId: fanWalletRow.circle_wallet_id,
         payer: fanWallet.address,
         payee: pickedTrack.artist_wallet,
         value,
@@ -405,14 +407,15 @@ export function getFanProfile(userId: string): any {
   return getOrCreateProfile(userId);
 }
 
-// ─── Circle SDK signing ──────────────────────────────────────
+// ─── Circle DCW signing ───────────────────────────────────────
 
 /**
- * Sign an EIP-712 TransferWithAuthorization using Circle W3S.
- * Uses the SDK's signTypedData method exposed for user-controlled wallets.
+ * Sign an EIP-712 TransferWithAuthorization using Circle Developer-Controlled
+ * Wallets. The CIRCLE_API_KEY on Railway authorizes the sign; Circle holds
+ * the actual key for the wallet.
  */
 async function signTransferWithAuth(args: {
-  userToken: string;
+  walletId: string;
   payer: string;
   payee: string;
   value: string;
@@ -420,10 +423,7 @@ async function signTransferWithAuth(args: {
   validBefore: number;
   nonce: string;
 }): Promise<string> {
-  const { initiateUserControlledWalletsClient } = await import('@circle-fin/user-controlled-wallets');
-  const circle = initiateUserControlledWalletsClient({
-    apiKey: process.env.CIRCLE_API_KEY ?? '',
-  });
+  const { signTypedData } = await import('../circle-dcw.js');
   const USDC = process.env.ARC_USDC_CONTRACT ?? '0x3600000000000000000000000000000000000000';
   const CHAIN_ID = Number(process.env.ARC_CHAIN_ID ?? 5042002);
 
@@ -454,12 +454,14 @@ async function signTransferWithAuth(args: {
       validBefore: args.validBefore,
       nonce: args.nonce,
     },
-  } as const;
+  };
 
-  // Circle's W3S exposes signTypedData via the SDK; we delegate to it
-  const result = await (circle as any).signTypedData({
-    userToken: args.userToken,
+  const result = await signTypedData({
+    walletId: args.walletId,
     data: JSON.stringify(data),
   });
-  return (result as any).data?.signature ?? (result as any).signature;
+  if (!result.ok || !result.data?.signature) {
+    throw new Error(`Circle signTypedData failed: ${result.error ?? 'no signature returned'}`);
+  }
+  return result.data.signature;
 }
