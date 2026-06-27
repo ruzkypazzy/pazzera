@@ -9,25 +9,37 @@
   <link rel="icon" type="image/png" href="/assets/favicon-32.png" sizes="32x32" />
   <link rel="icon" type="image/png" href="/assets/favicon-192.png" sizes="192x192" />
   <link rel="apple-touch-icon" href="/assets/favicon-192.png" />
+  <link rel="manifest" href="/manifest.json" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/src/styles.css" />
+  <meta property="og:title" content="Pazzera — pay-per-listen for indie artists" />
+  <meta property="og:description" content="Pay a fraction of a cent every time you press play. Artists get paid directly in USDC on Arc." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://pazzera.com" />
+  <meta property="og:image" content="/assets/logo.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Pazzera" />
+  <meta name="twitter:description" content="Pay-per-listen music on Arc" />
+  <meta name="twitter:image" content="/assets/logo.png" />
 </head>
 <body>
+  <a href="#app" class="skip-link">Skip to main content</a>
+
   <!-- Top nav -->
-  <header class="topnav">
-    <a href="/" class="brand" data-link>
-      <img src="/assets/logo.png" alt="Pazzera" class="brand-logo" width="180" height="86" />
+  <header class="topnav" role="banner">
+    <a href="/" class="brand" data-link aria-label="Pazzera home">
+      <img src="/assets/logo.png" alt="Pazzera logo" class="brand-logo" width="180" height="86" />
     </a>
-    <nav class="navlinks">
+    <nav class="navlinks" role="navigation" aria-label="Primary">
       <a href="/" data-link>Browse</a>
       <a href="/dashboard" data-link>Dashboard</a>
       <a href="/upload" data-link>Upload</a>
     </nav>
     <div class="navright">
-      <div class="listening-now-pill" id="listening-now-pill" title="Active listeners right now">
-        <span class="pulse-dot"></span>
+      <div class="listening-now-pill" id="listening-now-pill" title="Active listeners right now" aria-label="Active listeners">
+        <span class="pulse-dot" aria-hidden="true"></span>
         <span id="listening-now-count">—</span>
         <span class="muted">listening</span>
       </div>
@@ -36,33 +48,34 @@
   </header>
 
   <!-- App routes render here -->
-  <main id="app"></main>
+  <main id="app" role="main"></main>
 
   <!-- Sticky bottom player -->
-  <div id="player-bar" class="player-bar hidden">
+  <div id="player-bar" class="player-bar hidden" role="region" aria-label="Audio player">
     <div class="player-art"><img id="player-art-img" src="" alt="" /></div>
     <div class="player-meta">
       <div class="player-title" id="player-title">—</div>
       <div class="player-artist" id="player-artist">—</div>
     </div>
     <div class="player-controls">
-      <button class="iconbtn" id="player-back" title="Back 10s">⟲</button>
-      <button class="iconbtn playbtn" id="player-toggle" title="Play/Pause">▶</button>
-      <button class="iconbtn" id="player-forward" title="Forward 10s">⟳</button>
+      <button class="iconbtn" id="player-back" title="Back 10s" aria-label="Skip back 10 seconds">⟲</button>
+      <button class="iconbtn playbtn" id="player-toggle" title="Play/Pause" aria-label="Play or pause">▶</button>
+      <button class="iconbtn" id="player-forward" title="Forward 10s" aria-label="Skip forward 10 seconds">⟳</button>
     </div>
     <div class="player-progress">
-      <span id="player-cur">0:00</span>
-      <div class="progress-track" id="player-progress-track"><div class="progress-fill" id="player-progress-fill"></div></div>
-      <span id="player-dur">0:00</span>
+      <span id="player-cur" aria-label="Current playback time">0:00</span>
+      <div class="progress-track" id="player-progress-track" role="slider" aria-label="Track progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="progress-fill" id="player-progress-fill"></div></div>
+      <span id="player-dur" aria-label="Total duration">0:00</span>
     </div>
     <div class="player-volume">
-      <span>🔊</span>
-      <input type="range" min="0" max="1" step="0.01" value="0.7" id="player-volume" />
+      <span aria-hidden="true">🔊</span>
+      <label for="player-volume" class="sr-only">Volume</label>
+      <input type="range" min="0" max="1" step="0.01" value="0.7" id="player-volume" aria-label="Volume" />
     </div>
     <audio id="player-audio" preload="metadata"></audio>
   </div>
 
-  <div id="toast" class="toast hidden"></div>
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
   <script type="module" src="/src/main.js"></script>
 </body>

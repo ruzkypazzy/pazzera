@@ -297,7 +297,19 @@ function loadingScreen() {
   return html`<div class="loading"><div class="spinner"></div></div>`;
 }
 function render404() {
-  return html`<div class="loading"><h2>Page not found</h2><p class="muted"><a href="/" data-link>Go home</a></p></div>`;
+  return html`
+    <div class="not-found">
+      <div class="not-found-code">404</div>
+      <h1 class="not-found-title">This page wandered off</h1>
+      <p class="muted">Maybe you meant one of these?</p>
+      <div class="not-found-suggestions">
+        <a href="/" data-link class="btn btn-primary">Discover music</a>
+        <a href="/tracks" data-link class="btn btn-ghost">Browse tracks</a>
+        <a href="/artists" data-link class="btn btn-ghost">All artists</a>
+      </div>
+      <p class="not-found-help muted">Or go back to where you came from.</p>
+    </div>
+  `;
 }
 function renderError(e) {
   return html`
