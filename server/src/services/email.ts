@@ -73,7 +73,7 @@ export async function sendEmail(msg: EmailMessage): Promise<EmailResult> {
       text: msg.text ?? msg.html.replace(/<[^>]+>/g, ''),
     });
     if (usingEthereal) {
-      const previewUrl = nodemailer.getTestMessageUrl(info) ?? undefined;
+      const previewUrl = nodemailer.getTestMessageUrl(info) || undefined;
       console.log(`[email] preview: ${previewUrl}`);
       return { ok: true, previewUrl };
     }

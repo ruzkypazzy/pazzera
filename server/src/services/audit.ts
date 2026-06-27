@@ -28,7 +28,17 @@ export type AuditAction =
 export function audit(
   req: Request | null,
   action: AuditAction,
-  options: { userId?: string | null; metadata?: Record<string, any>; fields?: string[]; method?: string } = {},
+  options: {
+    userId?: string | null;
+    metadata?: Record<string, any>;
+    fields?: string[];
+    method?: string;
+    address?: string;
+    role?: string;
+    email?: string;
+    reason?: string;
+    failCount?: number;
+  } = {},
 ): void {
   try {
     const db = getDb();
