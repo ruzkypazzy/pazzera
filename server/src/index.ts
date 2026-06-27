@@ -17,6 +17,7 @@ import { agentRouter } from './routes/agent.js';
 import { curatorRouter } from './routes/curator.js';
 import { faucetRouter } from './routes/faucet.js';
 import { debugRouter } from './routes/debug.js';
+import { emailAuthRouter } from './routes/email-auth.js';
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3001);
@@ -84,6 +85,7 @@ app.get('/ready', (_req, res) => {
 // Routes
 app.use('/api/auth', authRouter);
 app.use('/api/auth', passwordResetRouter);
+app.use('/api/email-auth', emailAuthRouter);
 app.use('/api/account', accountRouter);
 app.use('/api/tracks', tracksRouter);
 app.use('/api/artists', artistsRouter);

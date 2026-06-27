@@ -25,7 +25,11 @@ export type AuditAction =
   | 'wallet_retry'
   | 'faucet_claim'
   | 'play_charged'
-  | 'account_deleted';
+  | 'account_deleted'
+  | 'email_auth_start'
+  | 'signup_email_otp'
+  | 'login_email_otp'
+  | 'wallet_provisioned_dcw';
 
 export function audit(
   req: Request | null,

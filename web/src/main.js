@@ -894,49 +894,206 @@ router.on('/reset-password', async () => {
 });
 
 // --- LOGIN ---
-router.on('/login', async () => {
-  const url = new URL(window.location.href);
-  const next = url.searchParams.get('next') || '/';
-  $('#app').innerHTML = html`
-    <div class="auth-page">
-      <h1>Log in</h1>
-      <p class="lede">Welcome back to Pazzera.</p>
-      <form id="login-form">
-        <div class="form-field">
-          <label>Email</label>
-          <input name="email" type="email" required autofocus />
-        </div>
-        <div class="form-field">
-          <label>Password</label>
-          <input name="password" type="password" required />
-        </div>
-        <button type="submit" class="btn btn-primary btn-block">Log in</button>
-      </form>
-      <div class="form-toggle">
-        <a href="/forgot-password" data-link>Forgot password?</a>
-        &nbsp;·&nbsp;
-        <a href="/signup" data-link>Sign up</a>
-      </div>
-    </div>
-  `;
-  $('#login-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    try {
-      await login(fd.get('email'), fd.get('password'));
-      router.go(next);
-    } catch (err) { toast(err.message, 'error'); }
-  });
-});
-
-// --- SIGNUP ---
+// --- LOGIN + SIGNUP (Polaris-style email OTP, with password fallback) ---
 router.on('/signup', async () => {
   const url = new URL(window.location.href);
   const initialRole = url.searchParams.get('role') || 'fan';
+  renderEmailAuthPage({
+    mode: 'signup',
+    title: 'Create your account',
+    subtitle: 'Enter your email. We\u2019ll send you a 6-digit code. Your wallet is created automatically.',
+    initialRole,
+  });
+});
+
+router.on('/login', async () => {
+  renderEmailAuthPage({
+    mode: 'login',
+    title: 'Log in to Pazzera',
+    subtitle: 'Enter your email. We\u2019ll send you a 6-digit code. No password needed.',
+    initialRole: 'fan',
+  });
+});
+
+function renderEmailAuthPage({ mode, title, subtitle, initialRole }) {
+  $('#app').innerHTML = html`
+    <div class="auth-page">
+      <h1>${title}</h1>
+      <p class="lede">${subtitle}</p>
+
+      ${mode === 'signup' ? html`
+        <div class="role-toggle" id="role-toggle">
+          <button data-role="fan" class="${initialRole === 'fan' ? 'active' : ''}">I'm a listener</button>
+          <button data-role="artist" class="${initialRole === 'artist' ? 'active' : ''}">I'm an artist</button>
+        </div>
+      ` : ''}
+
+      <div id="auth-step-1">
+        <form id="email-form">
+          <input type="hidden" name="role" value="${initialRole}" />
+          ${mode === 'signup' ? html`
+            <div class="form-field">
+              <label>Display name</label>
+              <input name="displayName" required maxlength="60" autofocus placeholder="How you'll appear on Pazzera" />
+            </div>
+          ` : ''}
+          <div class="form-field">
+            <label>Email</label>
+            <input name="email" type="email" required autofocus="${mode === 'login' ? 'autofocus' : ''}" placeholder="you@example.com" />
+          </div>
+          <button type="submit" class="btn btn-primary btn-block" id="send-code-btn">Send code</button>
+        </form>
+      </div>
+
+      <div id="auth-step-2" class="hidden">
+        <form id="otp-form">
+          <input type="hidden" name="email" id="otp-email" />
+          <input type="hidden" name="displayName" id="otp-displayName" />
+          <input type="hidden" name="role" id="otp-role" />
+          <div class="form-field">
+            <label>Enter the 6-digit code we sent to <strong id="otp-email-display"></strong></label>
+            <input name="otp" required pattern="\\d{6}" maxlength="6" minlength="6" autofocus
+                   inputmode="numeric" autocomplete="one-time-code" placeholder="123456"
+                   style="font-size:24px;text-align:center;letter-spacing:8px;font-family:monospace;" />
+            <div class="hint">Code expires in 10 minutes. Didn't get it? <a href="#" id="resend-code-link">Resend</a></div>
+          </div>
+          <button type="submit" class="btn btn-primary btn-block" id="verify-btn">Verify & enter Pazzera</button>
+          <button type="button" class="btn btn-ghost btn-block" id="change-email-btn" style="margin-top:8px;">Use a different email</button>
+          <div id="fallback-code" class="hidden muted small" style="margin-top:12px;text-align:center;word-break:break-all;"></div>
+        </form>
+      </div>
+
+      <div class="form-toggle">
+        ${mode === 'signup'
+          ? html`Already have an account? <a href="/login" data-link>Log in</a>`
+          : html`New to Pazzera? <a href="/signup" data-link>Create account</a>`}
+      </div>
+      <div class="form-toggle muted small" style="margin-top:16px;">
+        Prefer a password? <a href="#" id="use-password-link">Use email + password instead</a>
+      </div>
+    </div>
+  `;
+
+  // Step 1: send code
+  $('#email-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const email = String(fd.get('email') ?? '').trim();
+    const displayName = String(fd.get('displayName') ?? '').trim();
+    const role = String(fd.get('role') ?? 'fan');
+    const btn = $('#send-code-btn');
+    btn.disabled = true;
+    btn.textContent = 'Sending code…';
+    try {
+      const res = await api('/api/email-auth/start', { method: 'POST', body: JSON.stringify({ email }) });
+      $('#otp-email').value = email;
+      $('#otp-displayName').value = displayName;
+      $('#otp-role').value = role;
+      $('#otp-email-display').textContent = email;
+      $('#auth-step-1').classList.add('hidden');
+      $('#auth-step-2').classList.remove('hidden');
+      const fallback = $('#fallback-code');
+      if (res.sentBy === 'pazzera-fallback') {
+        fallback.classList.remove('hidden');
+        fallback.innerHTML = `Circle's email service was unreachable. We sent a fallback code from our server instead.<br><strong>Preview:</strong> <a href="${esc(res.previewUrl ?? '#')}" target="_blank">${esc(res.previewUrl ?? '(check your email)')}</a>`;
+      } else if (res.previewUrl) {
+        fallback.classList.remove('hidden');
+        fallback.innerHTML = `<strong>Email preview:</strong> <a href="${esc(res.previewUrl)}" target="_blank">${esc(res.previewUrl)}</a>`;
+      }
+    } catch (err) {
+      toast(err.message ?? 'Failed to send code', 'error');
+      btn.disabled = false;
+      btn.textContent = 'Send code';
+    }
+  });
+
+  // Step 2: verify code
+  $('#otp-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const email = String(fd.get('email'));
+    const otp = String(fd.get('otp') ?? '').trim();
+    const displayName = String(fd.get('displayName') ?? '').trim();
+    const role = String(fd.get('role') ?? 'fan');
+    const btn = $('#verify-btn');
+    btn.disabled = true;
+    btn.textContent = 'Verifying…';
+    try {
+      const res = await api('/api/email-auth/verify', {
+        method: 'POST',
+        body: JSON.stringify({ email, otp, displayName: displayName || undefined, role }),
+      });
+      toast('Welcome to Pazzera!', 'success');
+      state.user = res.user;
+      // Persist user to localStorage for reload
+      try { localStorage.setItem('pazzera.user', JSON.stringify(res.user)); } catch {}
+      if (res.wallet?.address) {
+        toast(`Wallet ready: ${res.wallet.address.slice(0, 6)}…${res.wallet.address.slice(-4)}`, 'success', 6000);
+      } else {
+        toast('Signed in. Wallet setup will retry on first play.', 'info', 6000);
+      }
+      const next = new URL(window.location.href).searchParams.get('next');
+      router.go(next || (res.user.role === 'artist' ? '/dashboard' : '/'));
+    } catch (err) {
+      toast(err.message ?? 'Wrong code', 'error');
+      btn.disabled = false;
+      btn.textContent = 'Verify & enter Pazzera';
+    }
+  });
+
+  // Change email link
+  $('#change-email-btn').addEventListener('click', () => {
+    $('#auth-step-2').classList.add('hidden');
+    $('#auth-step-1').classList.remove('hidden');
+    $('#send-code-btn').disabled = false;
+    $('#send-code-btn').textContent = 'Send code';
+  });
+
+  // Resend code link
+  $('#resend-code-link').addEventListener('click', async (e) => {
+    e.preventDefault();
+    const email = $('#otp-email').value;
+    try {
+      const res = await api('/api/email-auth/resend', { method: 'POST', body: JSON.stringify({ email }) });
+      toast('Code resent', 'success');
+      const fallback = $('#fallback-code');
+      if (res.previewUrl) {
+        fallback.classList.remove('hidden');
+        fallback.innerHTML = `<strong>New code preview:</strong> <a href="${esc(res.previewUrl)}" target="_blank">${esc(res.previewUrl)}</a>`;
+      }
+    } catch (err) {
+      toast(err.message ?? 'Failed to resend', 'error');
+    }
+  });
+
+  // Toggle role
+  const toggle = $('#role-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-role]');
+      if (!btn) return;
+      $$('#role-toggle button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      $('#email-form input[name=role]').value = btn.dataset.role;
+    });
+  }
+
+  // Fall back to password flow
+  $('#use-password-link').addEventListener('click', (e) => {
+    e.preventDefault();
+    if (mode === 'signup') {
+      renderPasswordSignup(initialRole);
+    } else {
+      renderPasswordLogin();
+    }
+  });
+}
+
+function renderPasswordSignup(initialRole) {
   $('#app').innerHTML = html`
     <div class="auth-page">
       <h1>Create your account</h1>
-      <p class="lede">Join Pazzera. Get paid per listen.</p>
+      <p class="lede">Use email + password instead.</p>
       <div class="role-toggle" id="role-toggle">
         <button data-role="fan" class="${initialRole === 'fan' ? 'active' : ''}">I'm a listener</button>
         <button data-role="artist" class="${initialRole === 'artist' ? 'active' : ''}">I'm an artist</button>
@@ -954,11 +1111,13 @@ router.on('/signup', async () => {
         <div class="form-field">
           <label>Password</label>
           <input name="password" type="password" required minlength="8" />
-          <div class="hint">At least 8 characters. Mix letters and numbers for strength.</div>
         </div>
         <button type="submit" class="btn btn-primary btn-block">Create account</button>
       </form>
       <div class="form-toggle">Already have one? <a href="/login" data-link>Log in</a></div>
+      <div class="form-toggle muted small" style="margin-top:16px;">
+        <a href="#" id="use-email-link">Use email code instead</a>
+      </div>
     </div>
   `;
   $('#role-toggle').addEventListener('click', (e) => {
@@ -975,7 +1134,47 @@ router.on('/signup', async () => {
       await signup(fd.get('email'), fd.get('password'), fd.get('displayName'), fd.get('role'));
     } catch (err) { toast(err.message, 'error'); }
   });
-});
+  $('#use-email-link').addEventListener('click', (e) => {
+    e.preventDefault();
+    router.go('/signup');
+  });
+}
+
+function renderPasswordLogin() {
+  $('#app').innerHTML = html`
+    <div class="auth-page">
+      <h1>Log in to Pazzera</h1>
+      <p class="lede">Use email + password instead.</p>
+      <form id="login-form">
+        <div class="form-field">
+          <label>Email</label>
+          <input name="email" type="email" required autofocus />
+        </div>
+        <div class="form-field">
+          <label>Password</label>
+          <input name="password" type="password" required />
+        </div>
+        <button type="submit" class="btn btn-primary btn-block">Log in</button>
+      </form>
+      <div class="form-toggle">New to Pazzera? <a href="/signup" data-link>Create account</a></div>
+      <div class="form-toggle" style="margin-top:8px;"><a href="/forgot-password" data-link>Forgot password</a></div>
+      <div class="form-toggle muted small" style="margin-top:16px;">
+        <a href="#" id="use-email-link">Use email code instead</a>
+      </div>
+    </div>
+  `;
+  $('#login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+      await login(fd.get('email'), fd.get('password'));
+    } catch (err) { toast(err.message, 'error'); }
+  });
+  $('#use-email-link').addEventListener('click', (e) => {
+    e.preventDefault();
+    router.go('/login');
+  });
+}
 
 // --- DASHBOARD (artist) ---
 router.on('/dashboard', async () => {
