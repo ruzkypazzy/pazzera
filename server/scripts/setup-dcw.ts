@@ -56,18 +56,30 @@ async function main() {
   console.log('   First 80 chars: ' + publicKey.slice(0, 80).replace(/\n/g, '\\n'));
   console.log('');
 
-  // 3. Encrypt — normalize public key to PEM format if it's PKIX JSON
+  // 3. Encrypt — try OAEP-SHA256 first (Circle's preferred), fall back to PKCS1v1.5
   let pemKey = publicKey;
   if (!pemKey.includes('-----BEGIN')) {
-    // Circle sometimes returns raw base64 SPKI; wrap in PEM headers
     const lines = pemKey.match(/.{1,64}/g) ?? [pemKey];
     pemKey = `-----BEGIN PUBLIC KEY-----\n${lines.join('\n')}\n-----END PUBLIC KEY-----\n`;
   }
-  const ciphertext = publicEncrypt(
-    { key: pemKey, padding: 6, oaepHash: 'sha256' },  // RSA_PKCS1_OAEP_PADDING with SHA-256
-    Buffer.from(secret, 'utf8'),
-  );
-  const ciphertextB64 = ciphertext.toString('base64');
+
+  let ciphertextB64: string;
+  try {
+    const ciphertext = publicEncrypt(
+      { key: pemKey, padding: 6, oaepHash: 'sha256' },
+      Buffer.from(secret, 'utf8'),
+    );
+    ciphertextB64 = ciphertext.toString('base64');
+    console.log('   Encrypted with RSA-OAEP-SHA256');
+  } catch (e: any) {
+    console.log('   RSA-OAEP-SHA256 failed (' + (e?.message ?? e) + '), falling back to PKCS1v1.5');
+    const ciphertext = publicEncrypt(
+      { key: pemKey, padding: 1 /* RSA_PKCS1_PADDING */ },
+      Buffer.from(secret, 'utf8'),
+    );
+    ciphertextB64 = ciphertext.toString('base64');
+    console.log('   Encrypted with PKCS1v1.5');
+  }
   console.log('3. Encrypted entity secret (base64):');
   console.log(`   ${ciphertextB64.slice(0, 60)}...\n`);
 
