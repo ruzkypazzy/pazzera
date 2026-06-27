@@ -63,3 +63,10 @@ export const authLimiters = {
   verifyEmail: rateLimit({ windowMs: 60 * 60_000, maxRequests: 10 }),
   general: rateLimit({ windowMs: 60_000, maxRequests: 120 }),      // 2/sec average
 };
+
+/**
+ * Reset all rate limit buckets. Used in test setup.
+ */
+export function resetRateLimits() {
+  buckets.clear();
+}

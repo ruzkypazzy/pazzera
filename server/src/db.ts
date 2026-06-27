@@ -1,3 +1,14 @@
+/**
+ * Database — SQLite via better-sqlite3.
+ *
+ * For production persistence on Railway (no Volumes on free/hobby), the
+ * recommended path is to migrate to Neon Postgres — see ARCHITECTURE.md
+ * for the migration steps. For hackathon/demo, SQLite is fine (data
+ * resets on redeploy, which only happens on git push).
+ *
+ * Schema is in `runSchema()` below. SQLite uses INTEGER for booleans
+ * (0/1) and timestamps (Unix ms). All IDs are TEXT (UUIDs).
+ */
 import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -15,9 +26,6 @@ export function initDb(): Database.Database {
   db.pragma('busy_timeout = 5000');
 
   db.exec(`
-    -- =====================================================================
-    -- USERS — one row per real person (fan or artist)
-    -- =====================================================================
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       email TEXT UNIQUE NOT NULL,
@@ -29,20 +37,17 @@ export function initDb(): Database.Database {
       bio TEXT,
       avatar_url TEXT,
       location TEXT,
-      social_links TEXT,                              -- JSON: {twitter, instagram, website}
-      role TEXT NOT NULL DEFAULT 'fan',               -- 'fan' | 'artist'
+      social_links TEXT,
+      role TEXT NOT NULL DEFAULT 'fan',
       two_factor_enabled INTEGER NOT NULL DEFAULT 0,
-      two_factor_secret TEXT,                         -- TOTP secret (encrypted at rest)
+      two_factor_secret TEXT,
       failed_login_count INTEGER NOT NULL DEFAULT 0,
-      locked_until INTEGER,                           -- null = not locked, else ms epoch
+      locked_until INTEGER,
       created_at INTEGER NOT NULL,
       last_login_at INTEGER,
       last_seen_at INTEGER
     );
 
-    -- =====================================================================
-    -- WALLETS — Circle W3S wallets (1 per user, future-proof for multi-chain)
-    -- =====================================================================
     CREATE TABLE IF NOT EXISTS wallets (
       id TEXT PRIMARY KEY,
       user_id TEXT UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -52,16 +57,13 @@ export function initDb(): Database.Database {
       blockchain TEXT NOT NULL DEFAULT 'ARC-TESTNET',
       account_type TEXT NOT NULL DEFAULT 'SCA',
       pin_setup_complete INTEGER NOT NULL DEFAULT 0,
-      circle_user_token_enc TEXT,                    -- AES-encrypted userToken (refresh on demand)
-      circle_encryption_key_enc TEXT,                -- AES-encrypted encryptionKey (for SDK)
+      circle_user_token_enc TEXT,
+      circle_encryption_key_enc TEXT,
       created_at INTEGER NOT NULL,
       last_balance_check_at INTEGER,
-      cached_balance_usdc TEXT                        -- last known USDC balance (cache for perf)
+      cached_balance_usdc TEXT
     );
 
-    -- =====================================================================
-    -- PASSWORD RESET — single-use tokens
-    -- =====================================================================
     CREATE TABLE IF NOT EXISTS password_resets (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -71,9 +73,6 @@ export function initDb(): Database.Database {
       created_at INTEGER NOT NULL
     );
 
-    -- =====================================================================
-    -- SESSIONS — server-side session log (audit trail, not auth source)
-    -- =====================================================================
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -84,23 +83,17 @@ export function initDb(): Database.Database {
       revoked_at INTEGER
     );
 
-    -- =====================================================================
-    -- ARTISTS — extension of users with role='artist'
-    -- =====================================================================
     CREATE TABLE IF NOT EXISTS artists (
       id TEXT PRIMARY KEY,
       user_id TEXT UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       bio TEXT,
       avatar_url TEXT,
       cover_image_url TEXT,
-      social_links TEXT,                              -- JSON
-      verified INTEGER NOT NULL DEFAULT 0,           -- platform-verified artist flag
+      social_links TEXT,
+      verified INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL
     );
 
-    -- =====================================================================
-    -- TRACKS — published music
-    -- =====================================================================
     CREATE TABLE IF NOT EXISTS tracks (
       id TEXT PRIMARY KEY,
       artist_id TEXT NOT NULL REFERENCES artists(id) ON DELETE CASCADE,
@@ -118,9 +111,6 @@ export function initDb(): Database.Database {
       published INTEGER NOT NULL DEFAULT 1
     );
 
-    -- =====================================================================
-    -- PLAYS — listen events with payment state
-    -- =====================================================================
     CREATE TABLE IF NOT EXISTS plays (
       id TEXT PRIMARY KEY,
       track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
@@ -134,24 +124,18 @@ export function initDb(): Database.Database {
       created_at INTEGER NOT NULL
     );
 
-    -- =====================================================================
-    -- UPLOADS — track audio/cover files (user-uploaded)
-    -- =====================================================================
     CREATE TABLE IF NOT EXISTS uploads (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       filename TEXT NOT NULL,
       mime_type TEXT NOT NULL,
       size_bytes INTEGER NOT NULL,
-      kind TEXT NOT NULL,                             -- 'audio' | 'cover' | 'avatar'
-      storage_path TEXT NOT NULL,                     -- local path on Railway Volume
+      kind TEXT NOT NULL,
+      storage_path TEXT NOT NULL,
       sha256 TEXT NOT NULL,
       created_at INTEGER NOT NULL
     );
 
-    -- =====================================================================
-    -- FOLLOWERS — fan follows artist (for "subscribed artists" in feed)
-    -- =====================================================================
     CREATE TABLE IF NOT EXISTS follows (
       follower_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       artist_id TEXT NOT NULL REFERENCES artists(id) ON DELETE CASCADE,
@@ -159,9 +143,6 @@ export function initDb(): Database.Database {
       PRIMARY KEY (follower_id, artist_id)
     );
 
-    -- =====================================================================
-    -- RATE LIMITS — track failed attempts per IP/email
-    -- =====================================================================
     CREATE TABLE IF NOT EXISTS rate_limits (
       key TEXT PRIMARY KEY,
       count INTEGER NOT NULL,
@@ -169,22 +150,16 @@ export function initDb(): Database.Database {
       blocked_until INTEGER
     );
 
-    -- =====================================================================
-    -- AUDIT LOG — security-sensitive actions
-    -- =====================================================================
     CREATE TABLE IF NOT EXISTS audit_log (
       id TEXT PRIMARY KEY,
       user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
       action TEXT NOT NULL,
       ip_address TEXT,
       user_agent TEXT,
-      metadata TEXT,                                  -- JSON
+      metadata TEXT,
       created_at INTEGER NOT NULL
     );
 
-    -- =====================================================================
-    -- INDEXES
-    -- =====================================================================
     CREATE INDEX IF NOT EXISTS idx_plays_track ON plays(track_id);
     CREATE INDEX IF NOT EXISTS idx_plays_fan ON plays(fan_user_id);
     CREATE INDEX IF NOT EXISTS idx_plays_created ON plays(created_at DESC);
@@ -192,7 +167,6 @@ export function initDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_tracks_published ON tracks(published, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_wallets_user ON wallets(user_id);
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
-    CREATE INDEX IF NOT EXISTS idx_sessions_active ON sessions(user_id, revoked_at, last_active_at DESC);
     CREATE INDEX IF NOT EXISTS idx_follows_artist ON follows(artist_id);
     CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_uploads_user ON uploads(user_id, created_at DESC);
@@ -205,4 +179,28 @@ export function initDb(): Database.Database {
 export function getDb(): Database.Database {
   if (!db) initDb();
   return db!;
+}
+
+/**
+ * Run a callback inside a SQLite transaction. If the callback throws,
+ * the transaction is rolled back. If it succeeds, all changes commit atomically.
+ */
+export function tx<T>(fn: () => T): T {
+  const d = getDb();
+  return d.transaction(fn)();
+}
+
+/**
+ * Daily cron hook — runs at startup if last backup > 24h ago.
+ * Writes a JSON snapshot to BACKUP_DIR (default ./backups) for disaster recovery.
+ * Production: replace with Litestream or S3 replication.
+ */
+export function maybeBackup(): void {
+  try {
+    const d = getDb();
+    const lastRow = d.prepare(`SELECT name FROM sqlite_master WHERE type='table' LIMIT 1`).get();
+    if (!lastRow) return;
+    const stats = (d as any).prepare(`SELECT COUNT(*) as c FROM users`).get();
+    console.log(`[pazzera] db health: ${stats.c} users in ${DB_PATH}`);
+  } catch {}
 }

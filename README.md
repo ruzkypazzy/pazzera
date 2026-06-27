@@ -4,173 +4,213 @@
 
 Pazzera is a multi-artist music platform where fans pay a fraction of a cent every time they hit play. No subscriptions, no platform taking 70%, no waiting weeks for a payout — the artist sees the play, the artist gets paid, settled on Arc in under 500ms via Circle Gateway + x402.
 
-Built for the [Lepton Agents Hackathon](https://lepton.thecanteenapp.com/) (Canteen × Circle, Jun 15 – Jul 6 2026), targeting **RFB 6 — Creator & Publisher Monetization**.
-
 **Live**: https://pazzera.com
-**API**: https://api.pazzera.com (backend on Railway)
-**Backend health**: https://api.pazzera.com/health
-
----
+**API**: https://api.pazzera.com
+**Built for**: [Lepton Agents Hackathon](https://lepton.thecanteenapp.com/) (Canteen × Circle, Jun 15 – Jul 6 2026), targeting **RFB 6 — Creator & Publisher Monetization**.
 
 ## What it does
 
-1. **Artist signs up** with email → Circle W3S provisions a real wallet on Arc Testnet (`eip155:5042002`).
-2. **Artist uploads a track** (mp3/wav URL) → sets a price per listen (default `0.001` USDC, configurable).
-3. **Fan signs in** with email → Circle W3S provisions their wallet, the SDK runs in-browser to authenticate via email OTP.
-4. **Fan hits play** → backend issues an EIP-712 `TransferWithAuthorization` challenge (the x402 standard).
-5. **Fan signs** in their wallet's hosted UI (Circle Web SDK) → signed EIP-712 typed data returns to the browser.
-6. **Backend verifies** the signature, **submits** to the Circle Gateway facilitator → settlement UUID returned.
-7. **Relayer batches** many settlements → one on-chain `submitBatch` tx on Arc → payment final in <500ms.
+1. **Artist signs up** with email → Circle W3S provisions a real wallet on Arc Testnet
+2. **Artist uploads a track** (mp3/wav URL) → sets a price per listen (default `0.001` USDC)
+3. **Fan signs in** with email → Circle W3S provisions their wallet
+4. **Fan hits play** → backend issues EIP-712 `TransferWithAuthorization` challenge (x402 standard)
+5. **Fan signs** in their wallet → signed typed data returns to browser
+6. **Backend verifies** signature, **submits** to Circle Gateway facilitator → settlement UUID
+7. **Relayer batches** settlements → on-chain `submitBatch` tx on Arc → payment final in <500ms
 
 The agent does the interesting work:
-- **Skip-gating** — listen < 10s is free (no signature), replay within 30s is free.
-- **Dynamic pricing** — `price_per_listen_usdc` is a column; the agent can reprice per-track based on demand.
-- **Multi-artist** — every artist has their own wallet, fans' payments route directly to them via Gateway's `payee` field.
+- **Skip-gating** — listen < 10s is free, replay within 30s is free
+- **Dynamic pricing** — `price_per_listen_usdc` per-track column
+- **Multi-artist** — each artist has their own wallet, fans pay them directly via Gateway
 
----
+## Architecture
 
-## Why this fits the hackathon
+```
+Browser (Vite SPA)
+  ↕ HTTPS
+Cloudflare Pages + DNS
+  ↕ HTTPS
+Railway (Node 20 + Express)  ←──→ Circle W3S API (user-controlled wallets)
+  ↕                                   ↕
+SQLite (dev) / Postgres (prod)    Arc Testnet RPC (USDC balance + receipts)
+```
 
-| Judging axis | Weight | How Pazzera scores |
-|---|---|---|
-| Agentic sophistication | 30% | The agent decides when to charge (skip + replay), validates EIP-712 signatures, submits to Gateway |
-| Traction | 30% | Built by an indie artist, for indie artists. Built-in distribution via artist communities (WhatsApp/Telegram/Discord) |
-| Circle tool usage | 20% | W3S User-Controlled Wallets + x402 + Gateway facilitator + USDC on Arc — every Circle primitive in the stack |
-| Innovation | 20% | First per-listen primitive for indie artists on Arc. Canteen's 8 starting points target self-hosted server operators — Pazzera targets the artist directly, a bigger addressable market |
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for details.
 
-RFB 6 is the priority lane this round ("the people the payment floor priced out"). Pazzera is built there by an actual artist who lives the problem.
+## Tech stack
 
----
-
-## Stack
-
-- **Backend**: Node.js + TypeScript + Express
-- **Database**: SQLite (better-sqlite3)
+- **Backend**: Node.js 20 + Express + TypeScript + better-sqlite3 (dev) / pg (prod)
+- **Frontend**: Vite + vanilla JS + custom CSS (no framework — keeps bundle small)
+- **Auth**: JWT sessions + bcryptjs + httpOnly cookies + AES-256-GCM at-rest encryption
 - **Wallets**: `@circle-fin/user-controlled-wallets` (server) + `@circle-fin/w3s-pw-web-sdk` (browser)
-- **Payments**: Circle Gateway facilitator (`@circle-fin/x402-batching` middleware + raw `/v1/x402/settle`)
-- **Chain**: Arc Testnet (chain ID `5042002`, USDC at `0x3600…0000`)
-- **EIP-712**: `TransferWithAuthorization` typed-data (USDC V2 standard)
-- **Frontend**: Vanilla JS + Vite + Vite Node Polyfills (for Circle Web SDK)
-- **Real verification**: `viem`'s `recoverTypedDataAddress` — no mock signature checks
+- **Payments**: Circle x402 EIP-712 typed data + Gateway facilitator
+- **Chain**: Arc Testnet (`eip155:5042002`, USDC `0x3600000000000000000000000000000000000000`)
+- **Email**: nodemailer with ethereal.email fallback for demo, real SMTP via env vars
+- **Security**: helmet + strict CORS allowlist + rate limiting + audit log
 
-## Network details (Arc Testnet)
+## Local development
 
-| Field | Value |
-|---|---|
-| Network | Arc Testnet |
-| Chain ID | `5042002` (`0x4CEF52`) |
-| RPC | `https://rpc.testnet.arc-node.thecanteenapp.com/v1/<your-key>` (Canteen-personalized, get via `arc-canteen rpc-url`) |
-| Public RPC | `https://rpc.testnet.arc.network` |
-| Explorer | https://testnet.arcscan.app |
-| USDC | `0x3600000000000000000000000000000000000000` (6 decimals) |
-| Gateway Wallet | `0x0077777d7EBA4688BDeF3E311b846F25870A19B9` |
-| CCTP Domain | `26` |
-| Faucet | https://faucet.circle.com |
+### Prerequisites
 
-## Repo structure
+- Node.js 20.18+ (uses `node:` prefix imports and `--no-warnings`)
+- npm or pnpm
+- (Optional) Circle W3S account for real wallet provisioning
+- (Optional) Arc Testnet RPC URL for wallet balance lookups
 
-```
-pazzera/
-├── server/
-│   ├── src/
-│   │   ├── index.ts            Express app
-│   │   ├── db.ts               SQLite schema
-│   │   ├── services/
-│   │   │   └── circle.ts       Circle W3S + Gateway + x402 verify/send
-│   │   └── routes/
-│   │       ├── artists.ts      signup + profile
-│   │       ├── tracks.ts       catalog + upload
-│   │       ├── play.ts         x402 play flow
-│   │       ├── wallet.ts       faucet
-│   │       ├── dashboard.ts    artist earnings
-│   │       ├── admin.ts        aggregate stats
-│   │       └── sign.ts         Circle SDK sign challenge
-│   ├── scripts/
-│   │   ├── fund.ts             fund a wallet via faucet
-│   │   └── seed.ts             demo data seeder
-│   ├── tests/
-│   │   └── basic.test.ts
-│   ├── package.json
-│   └── tsconfig.json
-├── web/
-│   ├── index.html
-│   ├── app.js                  player UI + Circle SDK + MetaMask fallback
-│   ├── styles.css
-│   └── package.json
-├── docs/
-│   ├── ARCHITECTURE.md
-│   ├── DEPLOYMENT.md
-│   └── SUBMISSION.md
-└── README.md
-```
-
-## Quickstart
+### Setup
 
 ```bash
-# 1. Install Canteen's Arc CLI (gives you a personalized RPC URL + testnet access)
-uv tool install git+https://github.com/the-canteen-dev/ARC-cli.git
-arc-canteen login
-arc-canteen rpc-url --export   # add this to your shell, or paste into .env
+# Clone
+git clone https://github.com/ruzkypazzy/pazzera.git
+cd pazzera
 
-# 2. Get a Circle API key + App ID from https://console.circle.com
-#    - Enable Wallets > User Controlled > Configurator
-#    - Configure Sign Typed Data (required for the x402 signing challenge)
-#    - Note your CIRCLE_API_KEY and CIRCLE_APP_ID
-
-# 3. Backend
+# Backend
 cd server
+cp .env.example .env
+# Fill in CIRCLE_API_KEY, CIRCLE_APP_ID, ARC_RPC_URL, JWT_SECRET (generate with `openssl rand -hex 32`),
+# ENCRYPTION_KEY (generate with `openssl rand -hex 32`)
 npm install
-cp .env.example .env   # paste CIRCLE_API_KEY, CIRCLE_APP_ID, ARC_RPC_URL
-npm run dev            # http://localhost:3001
+npm run build && npm start
 
-# 4. Frontend (separate shell)
-cd web
+# Frontend (separate terminal)
+cd ../web
 npm install
-# Create web/.env with VITE_PAZZERA_API and VITE_PAZZERA_APP_ID
-npm run dev            # http://localhost:5173
+npm run dev  # → http://localhost:5173
 ```
+
+### Running tests
+
+```bash
+cd server
+npm test         # vitest
+npm run typecheck
+```
+
+### Database
+
+Default is SQLite at `./pazzera.db`. To use Postgres (recommended for production):
+
+```bash
+DB_DRIVER=postgres DATABASE_URL=postgres://... npm start
+```
+
+The schema is auto-migrated on boot. See [ARCHITECTURE.md](./ARCHITECTURE.md#production-migration-sqlite--postgres) for the full Postgres migration path.
+
+## Deployment
+
+### Backend on Railway
+
+1. Connect GitHub repo at https://railway.com
+2. Auto-detects Dockerfile, builds multi-stage (TS → dist → slim runtime)
+3. Set environment variables in **Variables** tab (see `.env.example`)
+4. Generate domain at **Settings → Networking → Generate Domain**
+5. Add custom domain `api.pazzera.com`
+
+### Frontend on Cloudflare Pages
+
+1. Connect GitHub repo at https://dash.cloudflare.com → Workers & Pages
+2. Build command: `cd web && npm install && npm run build`
+3. Build output: `web/dist`
+4. Add custom domain `pazzera.com`
+
+### DNS
+
+| Type | Name | Target |
+|---|---|---|
+| CNAME | `@` | `<pages-project>.pages.dev` |
+| CNAME | `api` | `<railway-service>.up.railway.app` |
+
+Both with Cloudflare Proxy ON (orange cloud).
+
+## API Reference
+
+### Public endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/health` | Liveness check |
+| GET | `/ready` | Readiness (DB reachable) |
+| GET | `/api/tracks` | List published tracks (`?artistId=` filter) |
+| GET | `/api/tracks/:id` | Track detail |
+| GET | `/api/artists` | Artist catalog |
+| GET | `/api/artists/:id` | Artist profile + their tracks |
+| GET | `/api/stats/listening-now` | Active listeners in last 60s |
+| GET | `/api/stats/platform` | Platform totals |
+| GET | `/api/stats/artist/:id` | Per-artist stats |
+| GET | `/api/stats/track/:id` | Per-track stats |
+
+### Auth endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/auth/signup` | Create account + provision Circle wallet |
+| POST | `/api/auth/login` | Email + password login |
+| POST | `/api/auth/logout` | Clear session cookie |
+| GET | `/api/auth/me` | Current user + wallet |
+| POST | `/api/auth/forgot-password` | Send reset email |
+| POST | `/api/auth/reset-password` | Set new password via token |
+| POST | `/api/auth/refresh-circle-token` | Refresh 60min Circle SDK token |
+| POST | `/api/auth/complete-pin-setup` | Mark wallet PIN as set |
+
+### Account endpoints (auth required)
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/account` | Full profile + wallet + balance |
+| PATCH | `/api/account` | Update profile fields |
+| POST | `/api/account/avatar` | Upload avatar (data URL) |
+| POST | `/api/account/change-password` | Change password (current + new) |
+| POST | `/api/account/verify-email/send` | Send verification email |
+| GET | `/api/account/verify-email` | Verify email via token |
+| POST | `/api/account/wallet/refresh-balance` | Re-fetch USDC balance from Arc |
+| POST | `/api/account/wallet/complete-pin` | Mark PIN setup complete |
+| DELETE | `/api/account` | Delete account (requires password confirm) |
+
+### Artist + tracks (auth required for write)
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/dashboard/artist` | Artist dashboard data (KPIs + 14-day chart + tracks) |
+| POST | `/api/tracks` | Upload a track |
+| PUT | `/api/tracks/:id` | Edit track |
+| DELETE | `/api/tracks/:id` | Delete track |
+
+### Play flow (x402)
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/play/start` | Start play, returns EIP-712 challenge |
+| POST | `/api/play/confirm` | Submit signature, backend verifies + submits to Gateway |
 
 ## Environment variables
 
-| Var | Where | Source |
+| Variable | Required | Description |
 |---|---|---|
-| `CIRCLE_API_KEY` | server | https://console.circle.com |
-| `CIRCLE_APP_ID` | web (injected as `window.PAZZERA_APP_ID`) | same |
-| `ARC_RPC_URL` | server | `arc-canteen rpc-url` |
-| `ARC_CHAIN_ID` | server | `5042002` (hardcoded) |
-| `ARC_USDC_CONTRACT` | server | `0x3600000000000000000000000000000000000000` |
-| `GATEWAY_WALLET` | server | `0x0077777d7EBA4688BDeF3E311b846F25870A19B9` |
-| `FACILITATOR_URL` | server | `https://gateway-api-testnet.circle.com` |
-| `NETWORK_ID` | server | `eip155:5042002` |
-| `FAUCET_URL` | server | `https://faucet.circle.com` |
+| `PORT` | no | HTTP port (default 3001) |
+| `DB_DRIVER` | no | `sqlite` (default) or `postgres` |
+| `DB_PATH` | no | SQLite file path (default `./pazzera.db`) |
+| `DATABASE_URL` | for postgres | Postgres connection string |
+| `JWT_SECRET` | **yes** | Session signing key (32+ bytes hex) |
+| `ENCRYPTION_KEY` | **yes** | AES-256-GCM key for at-rest encryption (32+ bytes hex) |
+| `CIRCLE_API_KEY` | for real wallets | Circle W3S API key |
+| `CIRCLE_APP_ID` | for real wallets | Circle app ID |
+| `ARC_RPC_URL` | for balance | Arc Testnet RPC endpoint |
+| `PUBLIC_BASE_URL` | for emails | Base URL for email links (e.g. `https://pazzera.com`) |
+| `ALLOWED_ORIGINS` | no | Comma-separated CORS origins (default includes pazzera.com + localhost) |
+| `SMTP_HOST` / `SMTP_USER` / `SMTP_PASS` | for real email | SMTP credentials (falls back to ethereal.email) |
+| `SMTP_FROM` | no | From address (default `Pazzera <noreply@pazzera.com>`) |
+| `UPLOADS_DIR` | no | Local upload directory (default `./uploads`) |
 
-## Demo flow
-
-1. Open `pazzera.com` → see catalog (3 demo tracks from 2 artists).
-2. Click a track → enter email → Circle Web SDK creates a wallet (testnet).
-3. Hit play → SDK shows OTP modal → enter OTP → wallet created.
-4. Fund at https://faucet.circle.com (one click, ~5 testnet USDC).
-5. Hit play again → backend issues x402 EIP-712 challenge.
-6. Wallet signs the typed data → frontend POSTs signature.
-7. Backend verifies signature, submits to Gateway → settlement UUID.
-8. Relayer batches → on-chain `submitBatch` tx → <500ms finality.
-9. Toast: "✓ Paid $0.001 to [Artist] · settlement abc…".
-10. Polling opens testnet.arcscan.app with the batch tx.
-
-## Demo checklist
-
-- [ ] `arc-canteen login` and paste the RPC URL into `.env`
-- [ ] Set `CIRCLE_API_KEY` + `CIRCLE_APP_ID` from console.circle.com
-- [ ] `npm run seed` for demo data
-- [ ] Fund your own wallet via `npm run fund -- 0xYourAddress`
-- [ ] Open `localhost:5173`, walk through the play flow
-- [ ] Capture a 3-min demo video (script in `docs/SUBMISSION.md`)
-- [ ] Submit at https://forms.gle/SMqLaw2pMGDe58LFA
+Generate secrets with: `openssl rand -hex 32`
 
 ## License
 
-MIT
+MIT — see [LICENSE](./LICENSE).
 
-## Hackathon
+## Contributing
 
-Built for Lepton Agents Hackathon · Canteen × Circle · 2026
+See [CONTRIBUTING.md](./CONTRIBUTING.md). Bug reports welcome via GitHub Issues.
+
+## Security
+
+See [SECURITY.md](./SECURITY.md). Report vulnerabilities privately to security@pazzera.com.
