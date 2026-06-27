@@ -4,24 +4,27 @@
  *
  * Flow:
  *   POST /api/auth/signup  { email, password, displayName, role }
- *     - validates input, hashes password
- *     - creates user row
+ *     - validates input, hashes password, rate-limited per IP
+ *     - creates user row (wallet row created after Circle provisioning)
  *     - calls circle.createUser({ userId: email })
  *     - calls circle.createUserToken({ userId }) → userToken + encryptionKey
  *     - calls circle.createUserPinWithWallets(...) → challengeId
- *     - stores wallet row (pin_setup_complete = 0)
+ *     - encrypts userToken + encryptionKey at rest with AES-256-GCM
  *     - if role='artist', creates artist row
- *     - returns { user, challengeId, userToken, encryptionKey }
- *     - frontend runs sdk.execute(challengeId) → user sets PIN → wallet active
+ *     - issues JWT session cookie
+ *     - sends welcome email with wallet address + faucet link
+ *     - returns { user, wallet, challengeId, userToken, encryptionKey }
  *
  *   POST /api/auth/login  { email, password }
- *     - validates credentials
- *     - returns { user, wallet } (challengeId only if PIN not yet set)
+ *     - validates credentials, checks account lockout (5 fails = 15min)
+ *     - on success: reset fail counter, update last_login_at
+ *     - returns { user, wallet }
  *
  *   POST /api/auth/logout — clears cookie
  *   GET  /api/auth/me      — returns current user + wallet
- *   POST /api/auth/complete-pin-setup  — frontend calls after sdk.execute
+ *   POST /api/auth/complete-pin-setup — frontend calls after sdk.execute
  *     marks the wallet row as pin_setup_complete=1
+ *   POST /api/auth/refresh-circle-token — refresh 60min userToken for SDK
  */
 import { Router } from 'express';
 import { z } from 'zod';
@@ -35,12 +38,19 @@ import {
   clearSessionCookie,
   requireAuth,
 } from '../services/auth.js';
+import { encryptString, decryptString } from '../services/crypto.js';
+import { sendEmail, emailTemplates } from '../services/email.js';
+import { authLimiters } from '../services/rate-limit.js';
+import { audit } from '../services/audit.js';
 import { createUser, createUserToken, createUserPinWithWallets, listWallets } from '../services/circle.js';
 
 export const authRouter = Router();
 
+const MAX_FAILED_LOGINS = 5;
+const LOCKOUT_DURATION_MS = 15 * 60_000;  // 15 minutes
+
 const signupSchema = z.object({
-  email: z.string().email(),
+  email: z.string().email().max(200),
   password: z.string().min(8).max(200),
   displayName: z.string().min(1).max(60),
   role: z.enum(['fan', 'artist']).default('fan'),
@@ -48,10 +58,12 @@ const signupSchema = z.object({
 });
 
 // ─── Signup ────────────────────────────────────────────────
-authRouter.post('/signup', async (req, res) => {
+authRouter.post('/signup', authLimiters.signup, async (req, res) => {
   try {
     const parsed = signupSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: 'invalid signup', details: parsed.error.flatten() });
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'invalid signup', details: parsed.error.flatten() });
+    }
     const { email, password, displayName, role, bio } = parsed.data;
     const db = getDb();
 
@@ -87,12 +99,10 @@ authRouter.post('/signup', async (req, res) => {
       const pin = await createUserPinWithWallets(userToken, ['ARC-TESTNET'], 'SCA');
       challengeId = pin.challengeId;
     } catch (e: any) {
-      console.error('[auth/signup] circle error (continuing without wallet):', e?.response?.data ?? e?.message ?? e);
+      console.error('[auth/signup] circle error:', e?.response?.data ?? e?.message ?? e);
       // Don't block signup if Circle hiccups — user can retry wallet setup later.
     }
 
-    // If circle already returned an existing wallet (challenge error 155106),
-    // fall back to listWallets to grab the address.
     if (!walletAddress && userToken) {
       try {
         const list = await listWallets(userToken);
@@ -106,22 +116,49 @@ authRouter.post('/signup', async (req, res) => {
 
     if (walletId && walletAddress) {
       db.prepare(`
-        INSERT INTO wallets (id, user_id, circle_user_id, circle_wallet_id, address, blockchain, account_type, pin_setup_complete, created_at)
-        VALUES (?, ?, ?, ?, ?, 'ARC-TESTNET', 'SCA', ?, ?)
-      `).run(randomUUID(), userId, email, walletId, walletAddress, challengeId ? 0 : 1, now);
+        INSERT INTO wallets (id, user_id, circle_user_id, circle_wallet_id, address, blockchain, account_type,
+                              pin_setup_complete, circle_user_token_enc, circle_encryption_key_enc, created_at)
+        VALUES (?, ?, ?, ?, ?, 'ARC-TESTNET', 'SCA', ?, ?, ?, ?)
+      `).run(
+        randomUUID(),
+        userId,
+        email,
+        walletId,
+        walletAddress,
+        challengeId ? 0 : 1,
+        userToken ? encryptString(userToken) : null,
+        encryptionKey ? encryptString(encryptionKey) : null,
+        now,
+      );
+      audit(req, 'wallet_provisioned', { userId, address: walletAddress });
     }
 
     // Issue session JWT
     const jwt = signSession({ userId, email, role });
     setSessionCookie(res, jwt);
 
-    const user = db.prepare('SELECT id, email, display_name, role, created_at FROM users WHERE id = ?').get(userId);
+    audit(req, 'signup', { userId, role });
+
+    // Send welcome email with wallet + faucet link (async, don't block)
+    if (walletAddress) {
+      const tpl = emailTemplates().welcomeWithWallet(
+        displayName,
+        walletAddress,
+        `https://faucet.circle.com?address=${walletAddress}`,
+      );
+      sendEmail({ to: email, ...tpl }).catch(e => console.error('[email] welcome send failed:', e));
+    }
+
+    const user = db.prepare(`
+      SELECT id, email, email_verified, display_name, role, created_at
+      FROM users WHERE id = ?
+    `).get(userId);
     res.json({
       user,
       wallet: walletAddress ? { address: walletAddress, pinSetupComplete: !challengeId } : null,
-      challengeId,            // frontend runs sdk.execute(challengeId) if non-null
-      userToken,              // frontend passes to sdk.setAuthentication(...)
-      encryptionKey,          // ditto
+      challengeId,
+      userToken,
+      encryptionKey,
     });
   } catch (e: any) {
     console.error('[auth/signup]', e);
@@ -130,7 +167,7 @@ authRouter.post('/signup', async (req, res) => {
 });
 
 // ─── Login ─────────────────────────────────────────────────
-authRouter.post('/login', async (req, res) => {
+authRouter.post('/login', authLimiters.login, async (req, res) => {
   try {
     const parsed = z.object({
       email: z.string().email(),
@@ -141,19 +178,59 @@ authRouter.post('/login', async (req, res) => {
 
     const db = getDb();
     const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email) as any;
-    if (!user) return res.status(401).json({ error: 'invalid credentials' });
+    if (!user) {
+      audit(req, 'login_failed', { email, reason: 'no-user' });
+      return res.status(401).json({ error: 'invalid credentials' });
+    }
+
+    // Account lockout check
+    if (user.locked_until && user.locked_until > Date.now()) {
+      const minsLeft = Math.ceil((user.locked_until - Date.now()) / 60000);
+      return res.status(423).json({
+        error: 'account temporarily locked',
+        lockedUntil: user.locked_until,
+        minutesLeft: minsLeft,
+      });
+    }
+
     const ok = await verifyPassword(password, user.password_hash);
-    if (!ok) return res.status(401).json({ error: 'invalid credentials' });
+    if (!ok) {
+      const newFailCount = (user.failed_login_count ?? 0) + 1;
+      const lockUntil = newFailCount >= MAX_FAILED_LOGINS ? Date.now() + LOCKOUT_DURATION_MS : null;
+      db.prepare(`UPDATE users SET failed_login_count = ?, locked_until = ? WHERE id = ?`)
+        .run(newFailCount, lockUntil, user.id);
+      audit(req, 'login_failed', { email, reason: 'bad-password', failCount: newFailCount });
+      if (lockUntil) {
+        return res.status(423).json({
+          error: 'too many failed attempts',
+          lockedUntil: lockUntil,
+          minutesLeft: Math.ceil(LOCKOUT_DURATION_MS / 60000),
+        });
+      }
+      return res.status(401).json({ error: 'invalid credentials' });
+    }
 
-    db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(Date.now(), user.id);
+    db.prepare(`UPDATE users SET last_login_at = ?, last_seen_at = ?, failed_login_count = 0, locked_until = NULL WHERE id = ?`)
+      .run(Date.now(), Date.now(), user.id);
 
-    const wallet = db.prepare('SELECT address, pin_setup_complete as pinSetupComplete FROM wallets WHERE user_id = ?').get(user.id);
+    const wallet = db.prepare(`
+      SELECT address, pin_setup_complete as pinSetupComplete, cached_balance_usdc as usdcBalance
+      FROM wallets WHERE user_id = ?
+    `).get(user.id);
 
     const jwt = signSession({ userId: user.id, email: user.email, role: user.role });
     setSessionCookie(res, jwt);
 
+    audit(req, 'login', { userId: user.id });
+
     res.json({
-      user: { id: user.id, email: user.email, display_name: user.display_name, role: user.role },
+      user: {
+        id: user.id,
+        email: user.email,
+        display_name: user.display_name,
+        role: user.role,
+        email_verified: !!user.email_verified,
+      },
       wallet: wallet ?? null,
     });
   } catch (e: any) {
@@ -163,7 +240,8 @@ authRouter.post('/login', async (req, res) => {
 });
 
 // ─── Logout ────────────────────────────────────────────────
-authRouter.post('/logout', (_req, res) => {
+authRouter.post('/logout', (req, res) => {
+  audit(req, 'logout');
   clearSessionCookie(res);
   res.json({ ok: true });
 });
@@ -172,8 +250,16 @@ authRouter.post('/logout', (_req, res) => {
 authRouter.get('/me', requireAuth, (req, res) => {
   const db = getDb();
   const session = (req as any).session;
-  const user = db.prepare('SELECT id, email, display_name, role, created_at, last_login_at FROM users WHERE id = ?').get(session.userId);
-  const wallet = db.prepare('SELECT address, pin_setup_complete as pinSetupComplete FROM wallets WHERE user_id = ?').get(session.userId);
+  db.prepare(`UPDATE users SET last_seen_at = ? WHERE id = ?`).run(Date.now(), session.userId);
+  const user = db.prepare(`
+    SELECT id, email, email_verified, display_name, bio, avatar_url, role, two_factor_enabled,
+           created_at, last_login_at
+    FROM users WHERE id = ?
+  `).get(session.userId);
+  const wallet = db.prepare(`
+    SELECT address, pin_setup_complete as pinSetupComplete, cached_balance_usdc as usdcBalance
+    FROM wallets WHERE user_id = ?
+  `).get(session.userId);
   if (!user) return res.status(404).json({ error: 'user not found' });
   res.json({ user, wallet: wallet ?? null });
 });
@@ -182,7 +268,8 @@ authRouter.get('/me', requireAuth, (req, res) => {
 authRouter.post('/complete-pin-setup', requireAuth, (req, res) => {
   const db = getDb();
   const session = (req as any).session;
-  db.prepare('UPDATE wallets SET pin_setup_complete = 1 WHERE user_id = ?').run(session.userId);
+  db.prepare(`UPDATE wallets SET pin_setup_complete = 1 WHERE user_id = ?`).run(session.userId);
+  audit(req, 'wallet_pin_completed', { userId: session.userId });
   res.json({ ok: true });
 });
 
@@ -192,6 +279,9 @@ authRouter.post('/refresh-circle-token', requireAuth, async (req, res) => {
   const session = (req as any).session;
   try {
     const t = await createUserToken(session.email);
+    // Update stored encrypted copy
+    db.prepare(`UPDATE wallets SET circle_user_token_enc = ?, circle_encryption_key_enc = ? WHERE user_id = ?`)
+      .run(encryptString(t.userToken), encryptString(t.encryptionKey), session.userId);
     res.json({ userToken: t.userToken, encryptionKey: t.encryptionKey });
   } catch (e: any) {
     console.error('[auth/refresh-circle-token]', e);
