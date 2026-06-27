@@ -1,7 +1,7 @@
 // Pazzera — main client app
 // Modern dark mode music platform with pay-per-listen on Arc
 
-const API = window.PAZZERA_API || 'https://pazzera.fly.dev';
+const API = window.PAZZERA_API || 'https://api.pazzera.com';
 
 // ============ STATE ============
 const state = {
