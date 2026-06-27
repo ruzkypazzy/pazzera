@@ -1092,6 +1092,138 @@ router.on('/upload', async () => {
   });
 });
 
+// --- FAN AGENT PAGE ---
+router.on('/agent', async () => {
+  if (!state.user) { router.go('/login?next=/agent'); return; }
+
+  let profile, history;
+  try {
+    profile = await api('/api/agent/profile');
+    history = await api('/api/agent/history');
+  } catch (e) {
+    $('#app').innerHTML = html`<div class="auth-page"><h1>Could not load agent</h1><p class="muted">${esc(e.message)}</p></div>`;
+    return;
+  }
+
+  const prefs = profile.preferences ?? {};
+  const recentRuns = (history.runs ?? []).slice(0, 10);
+
+  $('#app').innerHTML = html`
+    <div class="fan-agent-page">
+      <header class="fan-agent-header">
+        <h1>🎧 Fan Agent</h1>
+        <p class="lede muted">
+          Tell the agent what you want to hear. It will search Pazzera's catalog, pick a track,
+          and pay the artist for you on Arc — directly from your Circle wallet.
+        </p>
+      </header>
+
+      <div class="fan-agent-grid">
+        <section class="fan-agent-chat-panel">
+          <div id="fan-agent-thread" class="fan-agent-thread">
+            <div class="chat-bubble chat-agent">
+              <div class="chat-text">
+                Try asking: <em>"play afrobeat by Burna Boy"</em>, or <em>"something chill, max $0.005 per song"</em>.
+              </div>
+            </div>
+          </div>
+          <form class="fan-agent-input-row" onsubmit="event.preventDefault(); window.Pazzera.fanAgentChat();">
+            <input
+              id="fan-agent-input"
+              type="text"
+              placeholder="Ask the agent to play music…"
+              maxlength="500"
+              autocomplete="off"
+              autofocus
+            />
+            <button id="fan-agent-send" type="submit" class="btn btn-primary">Send</button>
+          </form>
+        </section>
+
+        <aside class="fan-agent-side">
+          <div class="fan-agent-card">
+            <h3>Status</h3>
+            <label class="switch">
+              <input id="fan-agent-enabled" type="checkbox" ${profile.enabled ? 'checked' : ''} onchange="window.Pazzera.fanAgentToggle()" />
+              <span>${profile.enabled ? 'Active — agent is running' : 'Paused — manual listening only'}</span>
+            </label>
+          </div>
+
+          <div class="fan-agent-card">
+            <h3>Budget</h3>
+            <p class="muted">Per-day cap on how much your agent can spend.</p>
+            <div class="fan-budget-row">
+              <input id="fan-budget-input" type="number" min="0" step="0.01" value="${esc(profile.budget_per_day_usdc)}" />
+              <span class="muted">USDC / day</span>
+              <button class="btn btn-ghost btn-sm" onclick="window.Pazzera.fanAgentSetBudget()">Save</button>
+            </div>
+            <p class="muted small">
+              Spent today: <strong>${esc(profile.spent_today_usdc)} USDC</strong> ·
+              Total plays: ${profile.total_agent_plays}
+            </p>
+          </div>
+
+          <div class="fan-agent-card">
+            <h3>Preferences</h3>
+            <p class="muted">Guide the agent's choices.</p>
+            <label class="preference-row">
+              <span>Genre</span>
+              <input
+                type="text"
+                placeholder="e.g. afrobeat, lofi, jazz"
+                value="${esc(prefs.genre ?? '')}"
+                onblur="window.Pazzera.fanAgentPreference('genre', this.value || null)"
+              />
+            </label>
+            <label class="preference-row">
+              <span>Mood</span>
+              <input
+                type="text"
+                placeholder="e.g. chill, energetic, focus"
+                value="${esc(prefs.mood ?? '')}"
+                onblur="window.Pazzera.fanAgentPreference('mood', this.value || null)"
+              />
+            </label>
+            <label class="preference-row">
+              <span>Max track length (sec)</span>
+              <input
+                type="number"
+                min="30"
+                max="3600"
+                placeholder="e.g. 240"
+                value="${prefs.max_track_length_sec ?? ''}"
+                onblur="window.Pazzera.fanAgentPreference('max_track_length_sec', this.value ? Number(this.value) : null)"
+              />
+            </label>
+          </div>
+
+          <div class="fan-agent-card">
+            <h3>Recent activity</h3>
+            ${recentRuns.length === 0
+              ? html`<p class="muted small">No agent activity yet. Send a message to start.</p>`
+              : html`<ul class="agent-history">
+                  ${recentRuns.map((r) => html`
+                    <li>
+                      <div class="agent-history-input">${esc((r.input ?? '').slice(0, 80))}${(r.input ?? '').length > 80 ? '…' : ''}</div>
+                      <div class="agent-history-meta muted">
+                        ${new Date(r.created_at).toLocaleString()} · ${r.tokens_used ?? 0} tokens · ${r.duration_ms}ms
+                      </div>
+                      <div class="agent-history-output">${esc((r.output ?? '').slice(0, 200))}${(r.output ?? '').length > 200 ? '…' : ''}</div>
+                    </li>
+                  `)}
+                </ul>`
+            }
+          </div>
+        </aside>
+      </div>
+    </div>
+  `;
+
+  // Add nav link
+  const navlinks = $$('.navlinks a');
+  navlinks.forEach((a) => a.classList.toggle('active', a.getAttribute('href') === '/agent'));
+});
+
 // --- ONBOARDING PIN SETUP ---
 router.on('/onboarding/pin', async () => {
   const setup = state.pendingPinSetup;
@@ -1215,6 +1347,100 @@ window.Pazzera = {
   disable2fa: () => toast('2FA disable coming soon', 'info'),
   setupPin: () => router.go('/onboarding/pin'),
   retryWallet: () => router.go('/account'),
+
+  fanAgentChat: () => {
+    const input = $('#fan-agent-input');
+    const sendBtn = $('#fan-agent-send');
+    if (!input || !sendBtn) return;
+    input.disabled = true;
+    sendBtn.disabled = true;
+    sendBtn.textContent = 'Agent is thinking…';
+    const message = input.value.trim();
+    if (!message) { input.disabled = false; sendBtn.disabled = false; sendBtn.textContent = 'Send'; return; }
+    // Show user bubble
+    const thread = $('#fan-agent-thread');
+    if (thread) {
+      thread.insertAdjacentHTML('beforeend', `<div class="chat-bubble chat-user"><div class="chat-text">${esc(message)}</div></div>`);
+      thread.insertAdjacentHTML('beforeend', `<div class="chat-bubble chat-pending" id="fan-agent-pending"><div class="chat-text muted">…</div></div>`);
+      thread.scrollTop = thread.scrollHeight;
+    }
+    input.value = '';
+    api('/api/agent/chat', { method: 'POST', body: JSON.stringify({ message }) })
+      .then((res) => {
+        const pending = $('#fan-agent-pending');
+        if (pending) pending.remove();
+        if (thread) {
+          let trackHtml = '';
+          if (res.trackPlayed) {
+            const splits = res.trackPlayed.splits.map((s) => `<li>${esc(s.recipient_role)}: ${esc(s.amount_usdc)} USDC</li>`).join('');
+            trackHtml = `
+              <div class="chat-track-card">
+                <div class="chat-track-title">${esc(res.trackPlayed.title)}</div>
+                <div class="chat-track-artist muted">by ${esc(res.trackPlayed.artistName)}</div>
+                <div class="chat-track-meta">
+                  <span class="chip">Paid ${esc(res.trackPlayed.chargedUsdc)} USDC</span>
+                  ${res.trackPlayed.settlementId ? `<span class="chip chip-success">Settled on Arc</span>` : ''}
+                </div>
+                <details class="chat-track-splits">
+                  <summary>Royalty Splitter Agent decision</summary>
+                  <ul>${splits}</ul>
+                </details>
+              </div>
+            `;
+          }
+          thread.insertAdjacentHTML('beforeend', `
+            <div class="chat-bubble chat-agent">
+              <div class="chat-text">${esc(res.finalMessage)}</div>
+              ${trackHtml}
+              <div class="chat-budget muted">
+                Budget: ${esc(res.budget.daySpentUsdc)} / ${esc(res.budget.dayCapUsdc)} USDC today ·
+                ${res.tokensUsed} tokens ·
+                ${(res.durationMs / 1000).toFixed(1)}s
+              </div>
+            </div>
+          `);
+          thread.scrollTop = thread.scrollHeight;
+        }
+        // Refresh profile pill
+        if (typeof loadMe === 'function') loadMe();
+      })
+      .catch((e) => {
+        const pending = $('#fan-agent-pending');
+        if (pending) pending.remove();
+        if (thread) {
+          thread.insertAdjacentHTML('beforeend', `
+            <div class="chat-bubble chat-agent chat-error">
+              <div class="chat-text">Agent failed: ${esc(e.message ?? 'unknown error')}</div>
+            </div>
+          `);
+          thread.scrollTop = thread.scrollHeight;
+        }
+      })
+      .finally(() => {
+        input.disabled = false;
+        sendBtn.disabled = false;
+        sendBtn.textContent = 'Send';
+        input.focus();
+      });
+  },
+  fanAgentPreference: (key, value) => {
+    api('/api/agent/profile', { method: 'PATCH', body: JSON.stringify({ preferences: { [key]: value } }) })
+      .then(() => toast('Preference updated', 'success'))
+      .catch((e) => toast('Failed: ' + e.message, 'error'));
+  },
+  fanAgentSetBudget: () => {
+    const v = $('#fan-budget-input')?.value;
+    if (!v || isNaN(parseFloat(v))) return toast('Enter a valid USDC amount', 'error');
+    api('/api/agent/profile', { method: 'PATCH', body: JSON.stringify({ budgetPerDayUsdc: String(parseFloat(v)) }) })
+      .then(() => { toast('Budget updated', 'success'); router.render(); })
+      .catch((e) => toast('Failed: ' + e.message, 'error'));
+  },
+  fanAgentToggle: () => {
+    const enabled = $('#fan-agent-enabled')?.checked;
+    api('/api/agent/profile', { method: 'PATCH', body: JSON.stringify({ enabled }) })
+      .then(() => toast(enabled ? 'Fan Agent enabled' : 'Fan Agent paused', 'success'))
+      .catch((e) => toast('Failed: ' + e.message, 'error'));
+  },
   state,
 };
 
