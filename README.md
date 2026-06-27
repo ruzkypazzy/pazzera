@@ -7,6 +7,8 @@ Pazzera is a multi-artist music platform where fans pay a fraction of a cent eve
 Built for the [Lepton Agents Hackathon](https://lepton.thecanteenapp.com/) (Canteen × Circle, Jun 15 – Jul 6 2026), targeting **RFB 6 — Creator & Publisher Monetization**.
 
 **Live**: https://pazzera.com
+**API**: https://api.pazzera.com (backend on Railway)
+**Backend health**: https://api.pazzera.com/health
 
 ---
 
