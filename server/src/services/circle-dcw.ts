@@ -1,33 +1,24 @@
 /**
- * Circle Developer-Controlled Wallets (DCW) — Polaris Swarm's exact pattern.
+ * Circle Developer-Controlled Wallets (DCW) — Pazzera backend service.
  *
  * All operations happen server-side. No browser SDK. No PIN. No client key.
  *
  * Required env:
- *   CIRCLE_API_KEY        - Circle API key (already set)
- *   CIRCLE_APP_ID         - Circle app ID (already set)
- *   CIRCLE_ENTITY_SECRET  - 32-byte hex entity secret (must be set, see /api/debug/circle-setup)
- *   CIRCLE_WALLET_SET_ID  - Wallet set ID created from that entity secret (must be set)
+ *   CIRCLE_API_KEY        - Circle API key
+ *   CIRCLE_APP_ID         - Circle app ID
+ *   CIRCLE_ENTITY_SECRET  - 32-byte hex entity secret
+ *   CIRCLE_WALLET_SET_ID  - Wallet set ID created from that entity secret
  *
- * Endpoints used (all /v1/w3s):
- *   GET  /config/entity/publicKey              - get the entity's public key
- *   POST /config/entity/secret/ciphertext       - register entity secret (one-time)
- *   POST /developer/walletSets                 - create a wallet set (one-time)
- *   POST /developer/wallets                    - create a wallet
- *   GET  /developer/wallets/{id}               - get wallet details (address, balances)
- *   GET  /developer/wallets                     - list wallets
- *   POST /developer/sign/typedData              - sign EIP-712 (for x402)
- *   POST /developer/sign/message               - sign arbitrary messages
- *
- * Flow per user:
- *   1. POST /users                              - create Circle user by email
- *   2. POST /users/email/token                  - send OTP via Circle
- *   3. PUT  /users/email/authenticate           - verify OTP, get accessToken (optional)
- *   4. POST /developer/wallets                   - create DCW wallet for user
- *   5. GET  /developer/wallets/{id}              - read address
+ * DCW OTP flow (email-based auth):
+ *   1. POST /v1/w3s/users                          - create user by userId (email)
+ *   2. POST /v1/w3s/users/email/otp                - send OTP to user's email via Circle
+ *   3. POST /v1/w3s/users/email/otp/verify         - verify OTP → returns userId confirmed
+ *   4. POST /v1/w3s/developer/wallets              - create DCW wallet for user
+ *   5. GET  /v1/w3s/developer/wallets/{id}         - read wallet address
  */
 
 import { randomUUID } from 'node:crypto';
+import * as nodeCrypto from 'node:crypto';
 
 const BASE = 'https://api.circle.com';
 const API_KEY = () => process.env.CIRCLE_API_KEY ?? '';
@@ -43,7 +34,15 @@ interface CircleResponse<T = any> {
   errorCode?: number;
 }
 
-async function circleFetch<T = any>(path: string, opts: { method?: string; body?: any; headers?: Record<string, string>; timeoutMs?: number } = {}): Promise<CircleResponse<T>> {
+async function circleFetch<T = any>(
+  path: string,
+  opts: {
+    method?: string;
+    body?: any;
+    headers?: Record<string, string>;
+    timeoutMs?: number;
+  } = {},
+): Promise<CircleResponse<T>> {
   const apiKey = API_KEY();
   if (!apiKey) return { ok: false, status: 503, error: 'CIRCLE_API_KEY not set' };
 
@@ -54,7 +53,7 @@ async function circleFetch<T = any>(path: string, opts: { method?: string; body?
     ...(opts.headers ?? {}),
   };
 
-  const timeoutMs = opts.timeoutMs ?? 8000;
+  const timeoutMs = opts.timeoutMs ?? 10000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -73,7 +72,7 @@ async function circleFetch<T = any>(path: string, opts: { method?: string; body?
       return {
         ok: false,
         status: r.status,
-        error: json?.message ?? text.slice(0, 500),
+        error: json?.message ?? json?.errors?.[0]?.message ?? text.slice(0, 500),
         errorCode: json?.code,
       };
     }
@@ -87,28 +86,49 @@ async function circleFetch<T = any>(path: string, opts: { method?: string; body?
   }
 }
 
-/**
- * Setup helpers (one-time). Run from /api/debug/circle-setup if env vars are missing.
- */
+// ── Entity secret ciphertext generation ────────────────────
+// Must use RSA-OAEP with SHA-256, not PKCS1. Required per Circle DCW spec.
+async function generateEntitySecretCiphertext(publicKeyPem: string): Promise<string> {
+  const secret = ENTITY_SECRET();
+  if (!secret) throw new Error('CIRCLE_ENTITY_SECRET not set');
+  if (secret.length !== 64) throw new Error('CIRCLE_ENTITY_SECRET must be 64 hex chars (32 bytes)');
+
+  const secretBytes = Buffer.from(secret, 'hex');
+  const ciphertext = nodeCrypto.publicEncrypt(
+    {
+      key: publicKeyPem,
+      padding: nodeCrypto.constants.RSA_PKCS1_OAEP_PADDING,
+      oaepHash: 'sha256',
+    },
+    secretBytes,
+  );
+  return ciphertext.toString('base64');
+}
+
+// ── Setup helpers ───────────────────────────────────────────
+
 export async function getEntityPublicKey(): Promise<CircleResponse<{ publicKey: string }>> {
   return circleFetch('/v1/w3s/config/entity/publicKey');
 }
 
-export async function registerEntitySecret(entitySecret: string, entitySecretCiphertext?: string): Promise<CircleResponse> {
-  // First fetch the public key, then encrypt the entity secret with it
+export async function registerEntitySecret(
+  entitySecret: string,
+  entitySecretCiphertext?: string,
+): Promise<CircleResponse> {
   if (!entitySecretCiphertext) {
     const pk = await getEntityPublicKey();
     if (!pk.ok || !pk.data?.publicKey) {
       return { ok: false, status: pk.status, error: 'failed to fetch public key: ' + (pk.error ?? 'unknown') };
     }
-    const nodeCrypto = await import('node:crypto');
     try {
+      const secretBytes = Buffer.from(entitySecret, 'hex');
       const ciphertext = nodeCrypto.publicEncrypt(
         {
           key: pk.data.publicKey,
-          padding: nodeCrypto.constants.RSA_PKCS1_PADDING,
+          padding: nodeCrypto.constants.RSA_PKCS1_OAEP_PADDING,
+          oaepHash: 'sha256',
         },
-        Buffer.from(entitySecret),
+        secretBytes,
       );
       entitySecretCiphertext = ciphertext.toString('base64');
     } catch (e: any) {
@@ -125,54 +145,113 @@ export async function createWalletSet(name: string): Promise<CircleResponse<{ wa
   if (!ENTITY_SECRET()) {
     return { ok: false, status: 503, error: 'CIRCLE_ENTITY_SECRET not set' };
   }
+
+  // Must generate fresh RSA-OAEP ciphertext for every request
+  const pk = await getEntityPublicKey();
+  if (!pk.ok || !pk.data?.publicKey) {
+    return { ok: false, status: pk.status, error: 'failed to fetch entity public key: ' + (pk.error ?? '') };
+  }
+
+  let ciphertext: string;
+  try {
+    ciphertext = await generateEntitySecretCiphertext(pk.data.publicKey);
+  } catch (e: any) {
+    return { ok: false, status: 500, error: 'entity secret encryption failed: ' + (e?.message ?? e) };
+  }
+
   return circleFetch('/v1/w3s/developer/walletSets', {
     method: 'POST',
     body: {
       idempotencyKey: randomUUID(),
       name,
-      entitySecretCiphertext: '',  // First set uses the entity secret directly; subsequent sets need ciphertext
+      entitySecretCiphertext: ciphertext,
     },
   });
 }
 
-/**
- * User-facing operations
- */
+// ── User management ─────────────────────────────────────────
 
 export async function ensureUser(email: string): Promise<{ ok: boolean; userId: string; error?: string }> {
   const r = await circleFetch('/v1/w3s/users', {
     method: 'POST',
     body: { userId: email },
   });
-  // 409 = already exists. That's fine.
+  // 409 = already exists — that's fine
   if (r.ok) return { ok: true, userId: email };
   if (r.status === 409) return { ok: true, userId: email };
   return { ok: false, userId: email, error: r.error };
 }
 
+// ── Email OTP (DCW flow) ────────────────────────────────────
+// Circle DCW email OTP uses /v1/w3s/users/email/otp (NOT /users/email/token)
+
 export async function sendEmailOtp(email: string): Promise<CircleResponse> {
-  const r = await circleFetch('/v1/w3s/users/email/token', {
+  // DCW endpoint: send OTP to user's email
+  const r = await circleFetch('/v1/w3s/users/email/otp', {
     method: 'POST',
     body: { userId: email },
   });
+  // Fallback: some Circle API versions use /users/email/token
+  if (!r.ok && (r.status === 404 || r.status === 400)) {
+    const r2 = await circleFetch('/v1/w3s/users/email/token', {
+      method: 'POST',
+      body: { userId: email },
+    });
+    return r2;
+  }
   return r;
 }
 
-export async function verifyEmailOtp(email: string, otp: string): Promise<CircleResponse<{ accessToken?: string }>> {
-  return circleFetch<{ accessToken?: string }>('/v1/w3s/users/email/authenticate', {
-    method: 'PUT',
+export async function verifyEmailOtp(
+  email: string,
+  otp: string,
+): Promise<CircleResponse<{ accessToken?: string }>> {
+  // DCW endpoint: verify OTP
+  const r = await circleFetch<{ accessToken?: string }>('/v1/w3s/users/email/otp/verify', {
+    method: 'POST',
     body: { userId: email, otp },
   });
+  // Fallback for older API versions
+  if (!r.ok && (r.status === 404 || r.status === 400)) {
+    return circleFetch<{ accessToken?: string }>('/v1/w3s/users/email/authenticate', {
+      method: 'PUT',
+      body: { userId: email, otp },
+    });
+  }
+  return r;
 }
 
-export async function createUserWallet(email: string): Promise<CircleResponse<{ wallet: { id: string; address: string; blockchain: string; state: string } }>> {
+// ── Wallet management ───────────────────────────────────────
+
+export async function createUserWallet(
+  email: string,
+): Promise<CircleResponse<{ wallet: { id: string; address: string; blockchain: string; state: string } }>> {
   const walletSetId = WALLET_SET_ID();
   if (!walletSetId) {
-    return { ok: false, status: 503, error: 'CIRCLE_WALLET_SET_ID not set on Railway. Run /api/debug/circle-setup to create one.' };
+    return {
+      ok: false,
+      status: 503,
+      error:
+        'CIRCLE_WALLET_SET_ID not set on Railway. Set it to: 622c08e4-6295-5ed2-a0ad-ababff77a02f',
+    };
   }
   if (!ENTITY_SECRET()) {
     return { ok: false, status: 503, error: 'CIRCLE_ENTITY_SECRET not set on Railway' };
   }
+
+  // Generate fresh ciphertext for this request (required — no replay allowed)
+  const pk = await getEntityPublicKey();
+  if (!pk.ok || !pk.data?.publicKey) {
+    return { ok: false, status: pk.status, error: 'failed to fetch entity public key' };
+  }
+
+  let ciphertext: string;
+  try {
+    ciphertext = await generateEntitySecretCiphertext(pk.data.publicKey);
+  } catch (e: any) {
+    return { ok: false, status: 500, error: 'entity secret encryption failed: ' + (e?.message ?? e) };
+  }
+
   return circleFetch('/v1/w3s/developer/wallets', {
     method: 'POST',
     body: {
@@ -181,36 +260,55 @@ export async function createUserWallet(email: string): Promise<CircleResponse<{ 
       accountType: 'EOA',
       blockchains: ['ARC-TESTNET'],
       count: 1,
-      metadata: [{ name: 'email', value: email }],
+      entitySecretCiphertext: ciphertext,
+      metadata: [{ name: 'userId', value: email }],
     },
   });
 }
 
-export async function getWallet(walletId: string): Promise<CircleResponse<{ wallet: { id: string; address: string; blockchain: string; state: string; balances: any[] } }>> {
+export async function getWallet(
+  walletId: string,
+): Promise<CircleResponse<{ wallet: { id: string; address: string; blockchain: string; state: string; balances: any[] } }>> {
   return circleFetch(`/v1/w3s/developer/wallets/${walletId}`);
 }
 
 export async function listUserWallets(email: string): Promise<CircleResponse<{ wallets: any[] }>> {
-  return circleFetch(`/v1/w3s/wallets?userId=${encodeURIComponent(email)}`);
+  // List wallets filtered by metadata userId
+  return circleFetch(
+    `/v1/w3s/developer/wallets?walletSetId=${encodeURIComponent(WALLET_SET_ID())}&metadata=${encodeURIComponent(JSON.stringify([{ name: 'userId', value: email }]))}`,
+  );
 }
 
-/**
- * Sign an EIP-712 typed data payload with a developer-controlled wallet.
- * This is what powers the Fan Agent's x402 authorizations.
- */
+// ── EIP-712 signing ─────────────────────────────────────────
+
 export async function signTypedData(args: {
   walletId: string;
-  data: string;  // JSON-stringified EIP-712 payload
+  data: string;
 }): Promise<CircleResponse<{ signature: string }>> {
+  if (!ENTITY_SECRET()) {
+    return { ok: false, status: 503, error: 'CIRCLE_ENTITY_SECRET not set' };
+  }
+
+  const pk = await getEntityPublicKey();
+  if (!pk.ok || !pk.data?.publicKey) {
+    return { ok: false, status: pk.status, error: 'failed to fetch entity public key' };
+  }
+
+  let ciphertext: string;
+  try {
+    ciphertext = await generateEntitySecretCiphertext(pk.data.publicKey);
+  } catch (e: any) {
+    return { ok: false, status: 500, error: 'entity secret encryption failed: ' + (e?.message ?? e) };
+  }
+
   return circleFetch<{ signature: string }>('/v1/w3s/developer/sign/typedData', {
     method: 'POST',
-    body: args,
+    body: { ...args, entitySecretCiphertext: ciphertext },
   });
 }
 
-/**
- * End-to-end: provision user + wallet + return address.
- */
+// ── End-to-end: provision user + wallet ─────────────────────
+
 export async function provisionUserWallet(email: string): Promise<{
   ok: boolean;
   address?: string;
@@ -219,6 +317,7 @@ export async function provisionUserWallet(email: string): Promise<{
   steps: string[];
 }> {
   const steps: string[] = [];
+
   const u = await ensureUser(email);
   if (!u.ok) {
     steps.push(`ensureUser failed: ${u.error}`);
@@ -226,40 +325,42 @@ export async function provisionUserWallet(email: string): Promise<{
   }
   steps.push('user ready');
 
-  // Check if wallet already exists
+  // Check if wallet already exists for this user
   const existing = await listUserWallets(email);
   const existingWallets = existing.data?.wallets ?? [];
   if (existing.ok && existingWallets.length > 0) {
     const w = existingWallets[0];
     steps.push(`found existing wallet ${w.id}`);
+    if (w.address) {
+      return { ok: true, address: w.address, walletId: w.id, steps };
+    }
     const detail = await getWallet(w.id);
     if (detail.ok && detail.data?.wallet?.address) {
-      return {
-        ok: true,
-        address: detail.data.wallet.address,
-        walletId: w.id,
-        steps,
-      };
+      return { ok: true, address: detail.data.wallet.address, walletId: w.id, steps };
     }
   }
 
+  // Create new wallet
   const w = await createUserWallet(email);
   if (!w.ok) {
     steps.push(`createUserWallet failed: ${w.error}`);
     return { ok: false, error: w.error, steps };
   }
-  const walletId = w.data?.wallet?.id;
+
+  // Handle both response shapes: { wallet } and { wallets: [...] }
+  const walletObj = (w.data as any)?.wallet ?? (w.data as any)?.wallets?.[0];
+  const walletId = walletObj?.id;
   steps.push(`wallet ${walletId} created`);
 
-  if (w.data?.wallet?.address) {
-    steps.push(`address: ${w.data.wallet.address}`);
-    return { ok: true, address: w.data.wallet.address, walletId: walletId!, steps };
+  if (walletObj?.address) {
+    steps.push(`address: ${walletObj.address}`);
+    return { ok: true, address: walletObj.address, walletId: walletId!, steps };
   }
 
-  // Fetch address if not in response
   if (!walletId) {
     return { ok: false, error: 'wallet id missing after createUserWallet', steps };
   }
+
   const detail = await getWallet(walletId);
   if (!detail.ok || !detail.data?.wallet?.address) {
     steps.push(`getWallet failed: ${detail.error}`);
@@ -268,5 +369,3 @@ export async function provisionUserWallet(email: string): Promise<{
   steps.push(`address: ${detail.data.wallet.address}`);
   return { ok: true, address: detail.data.wallet.address, walletId, steps };
 }
-
-// Re-export for /api/debug/circle-setup
