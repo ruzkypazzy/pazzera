@@ -54,6 +54,8 @@ function getConfig() {
   };
 }
 
+export { getConfig };
+
 /**
  * Single chat completion call. If tools are provided, the model can return tool_calls.
  * Caller is responsible for feeding tool results back into the next call (ReAct loop).
