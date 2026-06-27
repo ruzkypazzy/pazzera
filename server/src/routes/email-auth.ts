@@ -46,12 +46,13 @@ emailAuthRouter.post('/start', authLimiters.signup, async (req, res) => {
   // 2. Send OTP via Circle
   const otpRes = await sendEmailOtp(email);
   if (!otpRes.ok) {
-    console.error('[email-auth/start] sendEmailOtp failed:', otpRes);
+    console.error('[email-auth/start] sendEmailOtp failed:', JSON.stringify(otpRes));
     audit(req, 'email_auth_start', { userId: null, email, metadata: { userExisted: true, otpSent: false, error: otpRes.error } });
     return res.status(502).json({
       error: 'Circle could not send the OTP email',
       detail: otpRes.error,
-      hint: 'Check console.circle.com → your app → Developer-Controlled Wallets is enabled and CIRCLE_ENTITY_SECRET + CIRCLE_WALLET_SET_ID are set on Railway.',
+      status: otpRes.status,
+      hint: 'Ensure CIRCLE_API_KEY, CIRCLE_ENTITY_SECRET and CIRCLE_WALLET_SET_ID are set on Railway. Check /api/debug/env to verify.',
     });
   }
 
@@ -110,10 +111,13 @@ emailAuthRouter.post('/verify', async (req, res) => {
     audit(req, 'login_email_otp', { userId: user.id, email });
   }
 
-  // Provision Circle DCW wallet
-  let walletResult;
+  // Provision Circle DCW wallet (non-blocking — user gets logged in regardless)
+  let walletResult: { ok: boolean; address?: string; walletId?: string; error?: string; steps: string[] } = { ok: false, steps: [], error: 'not attempted' };
   try {
     walletResult = await provisionUserWallet(email);
+    if (!walletResult.ok) {
+      console.error('[email-auth/verify] wallet provisioning failed:', walletResult.error, 'steps:', walletResult.steps);
+    }
   } catch (e: any) {
     console.error('[email-auth/verify] wallet provisioning threw:', e);
     walletResult = { ok: false, error: e?.message ?? String(e), steps: [] };
