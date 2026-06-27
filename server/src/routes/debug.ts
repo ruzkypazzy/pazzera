@@ -1,12 +1,20 @@
 /**
  * Debug endpoints — for production troubleshooting without exposing secrets.
  *
- * GET /api/debug/env    — returns which critical env vars are set (boolean only)
- * GET /api/debug/llm    — pings the configured LLM and returns the error
- * GET /api/debug/circle — pings Circle sandbox endpoints
+ * GET /api/debug/env           — returns which critical env vars are set (boolean only)
+ * GET /api/debug/llm           — pings the configured LLM and returns the error
+ * GET /api/debug/circle        — pings Circle sandbox endpoints
+ * GET /api/debug/circle-setup  — DCW setup helper: returns whether entity secret + wallet set are configured
+ * POST /api/debug/circle-setup — DCW setup helper: register entity secret + create wallet set
  */
 import { Router } from 'express';
+import { randomUUID } from 'node:crypto';
 import { getConfig } from '../services/llm.js';
+import {
+  getEntityPublicKey,
+  registerEntitySecret,
+  createWalletSet,
+} from '../services/circle-dcw.js';
 
 export const debugRouter = Router();
 
@@ -127,4 +135,66 @@ debugRouter.get('/circle', async (_req, res) => {
     result.error = e?.message ?? String(e);
   }
   res.json(result);
+});
+
+/**
+ * DCW setup helper. Tells you whether entity secret + wallet set are configured.
+ *
+ * If CIRCLE_ENTITY_SECRET is set but not registered, the response includes instructions.
+ * If CIRCLE_WALLET_SET_ID is not set, you can POST to this endpoint to:
+ *   - register the entity secret with Circle (one-time)
+ *   - create a wallet set (one-time)
+ *
+ * The wallet set ID is returned in the response so you can paste it into Railway.
+ */
+debugRouter.get('/circle-setup', async (_req, res) => {
+  const hasKey = !!process.env.CIRCLE_API_KEY;
+  const hasAppId = !!process.env.CIRCLE_APP_ID;
+  const hasEntitySecret = !!process.env.CIRCLE_ENTITY_SECRET;
+  const hasWalletSetId = !!process.env.CIRCLE_WALLET_SET_ID;
+  res.json({
+    CIRCLE_API_KEY: hasKey,
+    CIRCLE_APP_ID: hasAppId,
+    CIRCLE_ENTITY_SECRET: hasEntitySecret ? 'set' : 'NOT SET',
+    CIRCLE_WALLET_SET_ID: hasWalletSetId ? 'set' : 'NOT SET',
+    ready: hasKey && hasAppId && hasEntitySecret && hasWalletSetId,
+    instructions: !hasEntitySecret
+      ? '1. Generate entity secret at console.circle.com -> your app -> Developer-Controlled Wallets. Paste as CIRCLE_ENTITY_SECRET env var.'
+      : !hasWalletSetId
+      ? '2. POST /api/debug/circle-setup with body { "action": "create_wallet_set", "name": "Pazzera Users" } to create the wallet set.'
+      : 'Setup complete. Email-auth flow will now use Circle for OTP.',
+  });
+});
+
+debugRouter.post('/circle-setup', async (req, res) => {
+  const body = req.body ?? {};
+  const action = String(body.action ?? '');
+
+  if (action === 'register_entity_secret') {
+    const secret = process.env.CIRCLE_ENTITY_SECRET;
+    if (!secret) return res.status(400).json({ error: 'CIRCLE_ENTITY_SECRET env var must be set first' });
+    const r = await registerEntitySecret(secret);
+    return res.json(r);
+  }
+
+  if (action === 'create_wallet_set') {
+    const name = String(body.name ?? 'Pazzera Users');
+    if (!process.env.CIRCLE_ENTITY_SECRET) {
+      return res.status(400).json({ error: 'CIRCLE_ENTITY_SECRET must be set first' });
+    }
+    const r = await createWalletSet(name);
+    if (r.ok && r.data?.walletSet?.id) {
+      return res.json({
+        ...r,
+        hint: `Set this as CIRCLE_WALLET_SET_ID on Railway: ${r.data.walletSet.id}`,
+        walletSetId: r.data.walletSet.id,
+      });
+    }
+    return res.json(r);
+  }
+
+  return res.status(400).json({
+    error: 'unknown action',
+    validActions: ['register_entity_secret', 'create_wallet_set'],
+  });
 });

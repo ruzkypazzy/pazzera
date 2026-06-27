@@ -1,15 +1,17 @@
 /**
- * Email-only auth routes — Polaris Swarm-style.
+ * Email-only auth routes — Polaris Swarm's exact pattern.
  *
- * No passwords. User enters email → we call Circle to send a 6-digit OTP
- * (FROM CIRCLE, not from us) → user enters OTP → we call Circle to
- * verify → we provision a DCW wallet server-side → we issue our own
- * session cookie.
+ * No passwords. No fallback. Circle sends the OTP. Period.
  *
  * Endpoints:
  *   POST /api/email-auth/start    { email }           — sends OTP, returns challengeId
  *   POST /api/email-auth/verify   { email, otp }      — verifies OTP + provisions wallet + signs session
  *   POST /api/email-auth/resend   { email }           — resends OTP (rate-limited)
+ *
+ * Requires Railway env vars:
+ *   CIRCLE_API_KEY         - server-side API key
+ *   CIRCLE_ENTITY_SECRET   - hex entity secret for DCW
+ *   CIRCLE_WALLET_SET_ID   - the wallet set that holds user wallets
  */
 import { Router } from 'express';
 import { z } from 'zod';
@@ -24,53 +26,36 @@ import {
 import { signSession, setSessionCookie } from '../services/auth.js';
 import { audit } from '../services/audit.js';
 import { authLimiters } from '../services/rate-limit.js';
-import { encryptString } from '../services/crypto.js';
-import { sendEmail, emailTemplates } from '../services/email.js';
 
 export const emailAuthRouter = Router();
 
-// In-memory OTP store: { [email]: { code, expiresAt, attempts } }
-// Production should use Redis or DB. For hackathon, in-memory is fine.
-const otpStore = new Map<string, { code: string; expiresAt: number; attempts: number }>();
-
-function genOtp(): string {
-  return String(Math.floor(100000 + Math.random() * 900000));
-}
-
-const startSchema = z.object({
-  email: z.string().email(),
-});
+const startSchema = z.object({ email: z.string().email() });
 
 emailAuthRouter.post('/start', authLimiters.signup, async (req, res) => {
   const parsed = startSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'invalid email' });
   const { email } = parsed.data;
 
-  // 1. Ensure Circle user exists (idempotent)
+  // 1. Ensure Circle user exists
   const u = await ensureUser(email);
-  audit(req, 'email_auth_start', { userId: null, email, metadata: { userExisted: u.exists } });
+  if (!u.ok) {
+    console.error('[email-auth/start] ensureUser failed:', u);
+    return res.status(502).json({ error: 'Circle could not create user', detail: u.error });
+  }
 
   // 2. Send OTP via Circle
   const otpRes = await sendEmailOtp(email);
   if (!otpRes.ok) {
-    console.error('[email-auth/start] Circle OTP send failed:', otpRes);
-    // Fallback: send our own OTP so the demo works even if Circle is down
-    const code = genOtp();
-    otpStore.set(email, { code, expiresAt: Date.now() + 10 * 60_000, attempts: 0 });
-    const tpl = emailTemplates().verifyEmail('', code);
-    const mail = await sendEmail({ to: email, ...tpl }).catch((e) => ({ ok: false, error: e.message }));
-    console.log('[email-auth/start] fallback OTP for', email, '->', code, 'preview:', (mail as any)?.previewUrl);
-    return res.json({
-      ok: true,
-      challengeId: email,
-      sentBy: 'pazzera-fallback',
-      previewUrl: (mail as any)?.previewUrl,
-      message: 'OTP sent. Check your inbox.',
+    console.error('[email-auth/start] sendEmailOtp failed:', otpRes);
+    audit(req, 'email_auth_start', { userId: null, email, metadata: { userExisted: true, otpSent: false, error: otpRes.error } });
+    return res.status(502).json({
+      error: 'Circle could not send the OTP email',
+      detail: otpRes.error,
+      hint: 'Check console.circle.com → your app → Developer-Controlled Wallets is enabled and CIRCLE_ENTITY_SECRET + CIRCLE_WALLET_SET_ID are set on Railway.',
     });
   }
 
-  // Store a placeholder so verify can find the channel (Circle's OTP isn't stored by us)
-  otpStore.set(email, { code: 'CIRCLE-MANAGED', expiresAt: Date.now() + 10 * 60_000, attempts: 0 });
+  audit(req, 'email_auth_start', { userId: null, email, metadata: { userExisted: true, otpSent: true } });
 
   return res.json({
     ok: true,
@@ -92,38 +77,14 @@ emailAuthRouter.post('/verify', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'invalid body', detail: parsed.error.flatten() });
   const { email, otp, displayName, role = 'fan' } = parsed.data;
 
-  const stored = otpStore.get(email);
-  if (!stored) {
-    return res.status(400).json({ error: 'no OTP requested for this email. Tap "Send code" first.' });
-  }
-  if (stored.expiresAt < Date.now()) {
-    otpStore.delete(email);
-    return res.status(400).json({ error: 'OTP expired. Tap "Resend code".' });
-  }
-  if (stored.attempts >= 5) {
-    otpStore.delete(email);
-    return res.status(429).json({ error: 'too many attempts. Tap "Resend code".' });
+  // Verify OTP with Circle
+  const v = await verifyEmailOtp(email, otp);
+  if (!v.ok) {
+    audit(req, 'login_email_otp', { userId: null, email, metadata: { success: false, error: v.error } });
+    return res.status(401).json({ error: 'Circle rejected the OTP', detail: v.error });
   }
 
-  // Two paths: Circle-managed OTP (preferred) OR our fallback OTP
-  if (stored.code === 'CIRCLE-MANAGED') {
-    // Verify with Circle
-    const v = await verifyEmailOtp(email, otp);
-    if (!v.ok) {
-      stored.attempts += 1;
-      return res.status(401).json({ error: 'Circle rejected the OTP', detail: v.error });
-    }
-  } else {
-    // Verify against our stored code
-    if (stored.code !== otp) {
-      stored.attempts += 1;
-      return res.status(401).json({ error: 'wrong code' });
-    }
-  }
-
-  otpStore.delete(email);
-
-  // Now: provision or fetch user + wallet
+  // Provision user row
   const db = getDb();
   let user = db.prepare(`SELECT * FROM users WHERE email = ?`).get(email) as any;
   if (!user) {
@@ -143,7 +104,6 @@ emailAuthRouter.post('/verify', async (req, res) => {
     }
     audit(req, 'signup_email_otp', { userId, email, role });
   } else {
-    // Mark email verified if it wasn't
     if (!user.email_verified) {
       db.prepare(`UPDATE users SET email_verified = 1 WHERE id = ?`).run(user.id);
     }
@@ -155,13 +115,13 @@ emailAuthRouter.post('/verify', async (req, res) => {
   try {
     walletResult = await provisionUserWallet(email);
   } catch (e: any) {
-    console.error('[email-auth/verify] wallet provisioning failed:', e);
+    console.error('[email-auth/verify] wallet provisioning threw:', e);
     walletResult = { ok: false, error: e?.message ?? String(e), steps: [] };
   }
 
   // Persist wallet row
-  const now = Date.now();
   if (walletResult.ok && walletResult.address) {
+    const now = Date.now();
     const existing = db.prepare(`SELECT id FROM wallets WHERE user_id = ?`).get(user.id) as any;
     if (existing) {
       db.prepare(`
@@ -183,7 +143,6 @@ emailAuthRouter.post('/verify', async (req, res) => {
   const jwt = signSession({ userId: user.id, email: user.email, role: user.role });
   setSessionCookie(res, jwt);
 
-  // Return user info
   res.json({
     ok: true,
     user: {
@@ -211,24 +170,9 @@ emailAuthRouter.post('/resend', authLimiters.signup, async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'invalid email' });
   const { email } = parsed.data;
 
-  const stored = otpStore.get(email);
-  if (stored && stored.expiresAt > Date.now() && Date.now() - (stored.expiresAt - 10 * 60_000) < 30_000) {
-    return res.status(429).json({ error: 'wait 30 seconds before requesting another code' });
-  }
-
-  // Same logic as /start
   const otpRes = await sendEmailOtp(email);
   if (!otpRes.ok) {
-    const code = genOtp();
-    otpStore.set(email, { code, expiresAt: Date.now() + 10 * 60_000, attempts: 0 });
-    const tpl = emailTemplates().verifyEmail('', code);
-    const mail = await sendEmail({ to: email, ...tpl }).catch(() => null);
-    return res.json({
-      ok: true,
-      sentBy: 'pazzera-fallback',
-      previewUrl: (mail as any)?.previewUrl,
-    });
+    return res.status(502).json({ error: 'Circle could not resend the OTP', detail: otpRes.error });
   }
-  otpStore.set(email, { code: 'CIRCLE-MANAGED', expiresAt: Date.now() + 10 * 60_000, attempts: 0 });
   return res.json({ ok: true, sentBy: 'circle' });
 });
