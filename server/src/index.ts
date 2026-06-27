@@ -13,6 +13,8 @@ import { passwordResetRouter } from './routes/password-reset.js';
 import { dashboardRouter } from './routes/dashboard.js';
 import { statsRouter } from './routes/stats.js';
 import { adminRouter } from './routes/admin.js';
+import { agentRouter } from './routes/agent.js';
+import { curatorRouter } from './routes/curator.js';
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3001);
@@ -87,6 +89,8 @@ app.use('/api/play', playRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/stats', statsRouter);
 app.use('/api/admin', adminRouter);
+app.use('/api/agent', agentRouter);
+app.use('/api/curator', curatorRouter);
 
 // 404 + error handlers — never leak stack traces to client
 app.use((req, res) => {

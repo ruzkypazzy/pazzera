@@ -170,6 +170,98 @@ export function initDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_follows_artist ON follows(artist_id);
     CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_uploads_user ON uploads(user_id, created_at DESC);
+
+    -- ============ AGENT TABLES ============
+
+    -- Per-fan Fan Agent state: preferences, budget, history
+    CREATE TABLE IF NOT EXISTS fan_agent_profiles (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      enabled INTEGER NOT NULL DEFAULT 0,            -- 0 = off (manual listening), 1 = agent running
+      preferences TEXT NOT NULL DEFAULT '{}',        -- JSON: { genres[], mood, max_track_length_sec, ... }
+      budget_per_session_usdc TEXT NOT NULL DEFAULT '1.00',
+      budget_per_day_usdc TEXT NOT NULL DEFAULT '5.00',
+      spent_today_usdc TEXT NOT NULL DEFAULT '0',
+      spent_total_usdc TEXT NOT NULL DEFAULT '0',
+      last_reset_at INTEGER NOT NULL,
+      session_started_at INTEGER,
+      total_agent_plays INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    -- Track submission queue for the Curator Agent
+    CREATE TABLE IF NOT EXISTS pending_submissions (
+      id TEXT PRIMARY KEY,
+      artist_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      artist_id TEXT NOT NULL REFERENCES artists(id) ON DELETE CASCADE,
+      track_id TEXT,                                -- assigned when Curator approves + track row created
+      title TEXT NOT NULL,
+      description TEXT,
+      audio_url TEXT NOT NULL,
+      cover_url TEXT,
+      duration_seconds INTEGER NOT NULL,
+      suggested_tags TEXT,                          -- JSON array, artist-suggested
+      price_per_listen_usdc TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',       -- pending | approved | rejected
+      rejection_reason TEXT,
+      curator_notes TEXT,                           -- Curator Agent's free-form reasoning
+      curator_tags TEXT,                            -- JSON array, agent-suggested tags
+      curator_price_usdc TEXT,                      -- agent-suggested price
+      reviewed_at INTEGER,
+      tokens_used INTEGER,                          -- LLM cost visibility
+      created_at INTEGER NOT NULL
+    );
+
+    -- Per-play royalty split (Royalty Splitter Agent output)
+    -- One row per recipient per play. Single-artist tracks get one row (100%).
+    -- Multi-artist tracks get N rows summing to charged_usdc.
+    CREATE TABLE IF NOT EXISTS play_royalty_splits (
+      id TEXT PRIMARY KEY,
+      play_id TEXT NOT NULL REFERENCES plays(id) ON DELETE CASCADE,
+      track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+      recipient_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      recipient_wallet_address TEXT NOT NULL,
+      share_bps INTEGER NOT NULL,                   -- basis points (10000 = 100%)
+      amount_usdc TEXT NOT NULL,
+      settled INTEGER NOT NULL DEFAULT 0,
+      settlement_id TEXT,
+      created_at INTEGER NOT NULL
+    );
+
+    -- Per-track royalty config (set by artist at submission or in dashboard)
+    -- Single-artist tracks have one row with share_bps=10000.
+    -- Multi-artist tracks have multiple rows summing to 10000.
+    CREATE TABLE IF NOT EXISTS track_royalty_splits (
+      id TEXT PRIMARY KEY,
+      track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+      recipient_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role TEXT NOT NULL DEFAULT 'artist',          -- 'artist' | 'producer' | 'featured' | 'songwriter'
+      share_bps INTEGER NOT NULL,                   -- 10000 = 100%, 7000 = 70%
+      created_at INTEGER NOT NULL
+    );
+
+    -- Agent conversation log (debug + audit trail for "agent in action")
+    CREATE TABLE IF NOT EXISTS agent_runs (
+      id TEXT PRIMARY KEY,
+      agent_type TEXT NOT NULL,                     -- 'curator' | 'fan' | 'royalty_splitter'
+      user_id TEXT,                                 -- user who triggered (null for cron)
+      input TEXT NOT NULL,                          -- the prompt / input
+      output TEXT NOT NULL,                         -- the agent's final response
+      tool_trace TEXT,                              -- JSON array of tool calls made
+      tokens_used INTEGER NOT NULL DEFAULT 0,
+      duration_ms INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'success',       -- 'success' | 'error'
+      error TEXT,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_fan_agent_profiles_enabled ON fan_agent_profiles(enabled);
+    CREATE INDEX IF NOT EXISTS idx_pending_submissions_status ON pending_submissions(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_pending_submissions_artist ON pending_submissions(artist_user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_play_splits_play ON play_royalty_splits(play_id);
+    CREATE INDEX IF NOT EXISTS idx_play_splits_recipient ON play_royalty_splits(recipient_user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_track_splits_track ON track_royalty_splits(track_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_type ON agent_runs(agent_type, created_at DESC);
   `);
 
   console.log('[pazzera] db ready at', DB_PATH);
