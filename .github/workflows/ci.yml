@@ -1,9 +1,0 @@
-# Disabled placeholder.
-# The full CI workflow lives at docs/ci/ci.yml.example because the bootstrap
-# PAT did not have the `workflow` scope. To enable CI:
-#   1. Go to https://github.com/ruzkypazzy/pazzera/settings/actions
-#   2. Manually create the workflow from docs/ci/ci.yml.example, or
-#   3. Use a PAT with `workflow` scope.
-name: CI (disabled)
-on: []
-jobs: {}
