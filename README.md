@@ -69,7 +69,7 @@ See [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md) — covers Docker, Nginx, Let's
 - [x] **Prisma schema preview** — `packages/db/prisma/schema.prisma` (full schema + migrations land in Phase 2)
 - [x] **Docker stack** — `docker-compose.yml`, `docker/Dockerfile.web`, `docker/Dockerfile.worker`, `docker/nginx.conf`
 - [x] **Backup / restore / healthcheck scripts** — `scripts/`
-- [x] **CI workflow** — `.github/workflows/ci.yml`
+- [x] **CI workflow** — `docs/ci/ci.yml.example` (the bootstrap PAT didn't include `workflow` scope; manual activation from the GitHub UI after revoking the PAT)
 
 ---
 
