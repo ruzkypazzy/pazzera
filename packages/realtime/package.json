@@ -1,0 +1,27 @@
+{
+  "name": "@pazzera/realtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "start": "tsx src/server.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@pazzera/core": "workspace:*",
+    "@pazzera/db": "workspace:*",
+    "@pazzera/queue": "workspace:*",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.0",
+    "tsx": "^4.15.0",
+    "typescript": "^5.4.5"
+  }
+}

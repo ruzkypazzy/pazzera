@@ -1,0 +1,274 @@
+// Pazzera Prisma schema — Phase 1 preview.
+// Full schema, indexes, and seed scripts land in Phase 2.
+// This file is wired up so the workspace type-checks end-to-end now.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Users + auth ────────────────────────────────────────────────────
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  username     String   @unique
+  displayName  String?
+  bio          String?
+  avatarUrl    String?
+  role         String   @default("listener") // listener | artist | admin
+  isArtist     Boolean  @default(false)
+  isOnboarded  Boolean  @default(false)
+  emailVerifiedAt DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  wallet           Wallet?
+  songs            Song[]         @relation("ArtistSongs")
+  streams          Stream[]
+  payments         Payment[]      @relation("PayerPayments")
+  recipients       RoyaltyRecipient[]
+  otpCodes         OtpCode[]
+  sessions         Session[]
+  artistProfile    ArtistProfile?
+
+  @@index([username])
+  @@index([email])
+}
+
+model ArtistProfile {
+  id            String  @id @default(cuid())
+  userId        String  @unique
+  user          User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bio           String?
+  bannerUrl     String?
+  socialLinks   Json?
+  approvedAt    DateTime?
+}
+
+// ─── Wallet ──────────────────────────────────────────────────────────
+model Wallet {
+  id                   String  @id @default(cuid())
+  userId               String  @unique
+  user                 User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  address              String  @unique
+  encryptedPrivateKey  String  // AES-256-GCM blob JSON
+  balanceUsdc          String  @default("0") // cached; ledger is source of truth
+  pendingUsdc          String  @default("0")
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([address])
+}
+
+model Transaction {
+  id          String   @id @default(cuid())
+  walletId    String
+  type        String   // deposit | withdraw | stream_payment | royalty_payout
+  amountUsdc  String
+  amountBaseUnits String
+  direction   String   // credit | debit
+  status      String   // pending | confirmed | failed
+  txHash      String?
+  streamId    String?
+  paymentId   String?
+  payoutId    String?
+  meta        Json?
+  createdAt   DateTime @default(now())
+  confirmedAt DateTime?
+
+  @@index([walletId, createdAt])
+  @@index([txHash])
+}
+
+// ─── Auth sessions + OTP ─────────────────────────────────────────────
+model OtpCode {
+  id          String   @id @default(cuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  email       String
+  codeHash    String   // bcrypt hash of the OTP code
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  attempts    Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@index([email, createdAt])
+}
+
+model Session {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  csrfToken   String   // random, used in double-submit cookie
+  userAgent   String?
+  ipAddress   String?
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// ─── Music catalog ──────────────────────────────────────────────────
+model Song {
+  id                    String   @id @default(cuid())
+  slug                  String   @unique
+  title                 String
+  artistId              String
+  artist                User     @relation("ArtistSongs", fields: [artistId], references: [id])
+  artistName            String
+  artistUsername        String
+  featuredNames         String[] @default([])
+  producerName          String?
+  description           String?
+
+  coverKey              String
+  coverUrl              String
+  audioKey              String
+  audioUrl              String
+
+  durationSeconds       Int
+  audioBitrateKbps      Int?
+  audioSampleRateHz     Int?
+  audioChannels         Int?
+  audioPeakDb           Float?
+  audioHash             String?
+
+  artistPriceUsdc       String   // requested price
+  publishedPriceUsdc    String?  // set by curator (may be lower)
+
+  curatorStatus         String   @default("pending") // pending | approved | rejected | needs_changes
+  curatorScoreMetadata  Float?
+  curatorScoreAudio     Float?
+  curatorScoreSpam      Float?
+  curatorReasons        String[] @default([])
+  curatorReviewedAt     DateTime?
+
+  isPublic              Boolean  @default(false)
+  playCount             Int      @default(0)
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  recipients            RoyaltyRecipient[]
+  streams               Stream[]
+  payments              Payment[]
+
+  @@index([artistId])
+  @@index([isPublic, createdAt])
+  @@index([audioHash])
+}
+
+model RoyaltyRecipient {
+  id              String   @id @default(cuid())
+  songId          String
+  song            Song     @relation(fields: [songId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  username        String
+  role            String   // artist | featured | producer
+  percentageBps   Int      // 10000 = 100%
+  createdAt       DateTime @default(now())
+
+  @@unique([songId, userId, role])
+  @@index([songId])
+}
+
+// ─── Streaming + payments ───────────────────────────────────────────
+model Stream {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  songId          String
+  song            Song     @relation(fields: [songId], references: [id])
+  startedAt       DateTime @default(now())
+  endedAt         DateTime?
+  endReason       String?  // natural | skipped | aborted | flagged
+  charged         Boolean  @default(false)
+  chargedAt       DateTime?
+  flaggedAbuse    Boolean  @default(false)
+  totalActiveMs   Int      @default(0)
+
+  ticks           PlaybackTick[]
+  payment         Payment?
+
+  @@index([userId, startedAt])
+  @@index([songId, startedAt])
+}
+
+model PlaybackTick {
+  id          String   @id @default(cuid())
+  streamId    String
+  stream      Stream   @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  monotonicMs BigInt
+  positionSec Float
+  wasPause    Boolean  @default(false)
+  wasSeek     Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([streamId, monotonicMs])
+}
+
+model Payment {
+  id                     String   @id @default(cuid())
+  streamId               String   @unique
+  stream                 Stream   @relation(fields: [streamId], references: [id])
+  songId                 String
+  song                   Song     @relation(fields: [songId], references: [id])
+  payerUserId            String
+  payer                  User     @relation("PayerPayments", fields: [payerUserId], references: [id])
+  amountUsdc             String
+  amountBaseUnits        String
+  status                 String   @default("pending") // pending | settled | failed | distributed
+  txHash                 String?
+  facilitatorTransferId  String?
+  settledAt              DateTime?
+  distributedAt          DateTime?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  payouts                Payout[]
+
+  @@index([payerUserId, createdAt])
+  @@index([status])
+}
+
+model Payout {
+  id                String   @id @default(cuid())
+  paymentId         String
+  payment           Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  recipientUsername String
+  recipientAddress  String
+  amountUsdc        String
+  amountBaseUnits   String
+  txHash            String?
+  status            String   @default("pending") // pending | sent | failed
+  createdAt         DateTime @default(now())
+  confirmedAt       DateTime?
+
+  @@index([paymentId])
+  @@index([recipientUsername])
+}
+
+// ─── Agent logs ─────────────────────────────────────────────────────
+model AgentLog {
+  id        String   @id @default(cuid())
+  agent     String   // curator | fan | split
+  songId    String?
+  streamId  String?
+  paymentId String?
+  decision  String
+  reason    String?
+  payloadJson Json?
+  createdAt DateTime @default(now())
+
+  @@index([agent, createdAt])
+  @@index([songId])
+  @@index([streamId])
+  @@index([paymentId])
+}

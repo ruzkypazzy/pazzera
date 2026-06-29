@@ -1,0 +1,34 @@
+# Pazzera worker image — BullMQ agent workers
+FROM node:20-alpine AS base
+RUN apk add --no-cache libc6-compat ffmpeg tini
+WORKDIR /app
+
+FROM base AS deps
+COPY pnpm-workspace.yaml package.json ./
+COPY packages/core/package.json packages/core/
+COPY packages/db/package.json packages/db/
+COPY packages/storage/package.json packages/storage/
+COPY packages/blockchain/package.json packages/blockchain/
+COPY packages/queue/package.json packages/queue/
+COPY packages/agents/package.json packages/agents/
+RUN corepack enable && corepack prepare pnpm@9.6.0 --activate && pnpm install --frozen-lockfile
+
+FROM base AS builder
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/packages ./packages
+COPY . .
+RUN corepack enable && corepack prepare pnpm@9.6.0 --activate && \
+    pnpm --filter @pazzera/agents build && \
+    pnpm --filter @pazzera/core build && \
+    pnpm --filter @pazzera/db build && \
+    pnpm --filter @pazzera/queue build && \
+    pnpm --filter @pazzera/blockchain build
+
+FROM base AS runner
+ENV NODE_ENV=production
+RUN addgroup -g 1001 -S nodejs && adduser -S pazzera -u 1001
+COPY --from=builder /app/packages ./packages
+COPY --from=builder /app/node_modules ./node_modules
+USER pazzera
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["node", "packages/agents/dist/workers/run.js"]

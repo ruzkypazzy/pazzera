@@ -1,0 +1,40 @@
+{
+  "name": "pazzera",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pazzera — decentralized pay-per-listen music streaming on Arc Testnet",
+  "license": "UNLICENSED",
+  "scripts": {
+    "dev": "pnpm --filter @pazzera/web dev",
+    "build": "pnpm -r build",
+    "start": "pnpm --filter @pazzera/web start",
+    "lint": "eslint .",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "test:e2e": "pnpm --filter @pazzera/web test:e2e",
+    "db:generate": "pnpm --filter @pazzera/db generate",
+    "db:migrate": "pnpm --filter @pazzera/db migrate:dev",
+    "db:push": "pnpm --filter @pazzera/db push",
+    "db:seed": "pnpm --filter @pazzera/db seed",
+    "worker": "pnpm --filter @pazzera/workers start",
+    "socket": "pnpm --filter @pazzera/realtime start"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.0",
+    "@typescript-eslint/eslint-plugin": "^7.13.0",
+    "@typescript-eslint/parser": "^7.13.0",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-import": "^2.29.1",
+    "eslint-plugin-no-restricted-imports": "^1.0.0",
+    "husky": "^9.0.11",
+    "lint-staged": "^15.2.2",
+    "prettier": "^3.3.2",
+    "tsx": "^4.15.0",
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "packageManager": "pnpm@9.6.0"
+}
