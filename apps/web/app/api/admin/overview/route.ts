@@ -3,6 +3,7 @@
  * Aggregated admin metrics + recent agent activity + risk events.
  */
 import { withApi, requireSession, prisma, AppError } from '@pazzera/core';
+import { sumStrings } from '@pazzera/db/utils/big-arith';
 import { getQueueConnection } from '@pazzera/queue';
 
 export const GET = withApi(async () => {
@@ -24,9 +25,9 @@ export const GET = withApi(async () => {
       select: { userId: true },
       distinct: ['userId'],
     }).then((rows) => rows.length),
-    prisma.payment.aggregate({
+    prisma.payment.findMany({
       where: { status: { in: ['settled', 'distributed'] } },
-      _sum: { amountBaseUnits: true, amountUsdc: true },
+      select: { amountBaseUnits: true, amountUsdc: true },
     }),
     prisma.payment.count({ where: { status: { in: ['settled', 'distributed'] } } }),
     prisma.agentLog.findMany({
@@ -92,7 +93,7 @@ export const GET = withApi(async () => {
         artists,
         streamsToday,
         totalPayments,
-        totalUsdcVolume: (Number(totalVolume._sum.amountBaseUnits ?? '0') / 1_000_000).toString(),
+        totalUsdcVolume: (Number(sumStrings(totalVolume, 'amountBaseUnits')) / 1_000_000).toString(),
         pendingReviewCount: manualReviewCount,
       },
       agentFeed: agentFeed.map((e) => ({

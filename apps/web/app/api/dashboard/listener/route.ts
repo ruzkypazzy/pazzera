@@ -3,7 +3,7 @@
  * Returns everything the listener dashboard needs in one call.
  */
 import { withApi, prisma, requireSession } from '@pazzera/core';
-import { AnalyticsRepo } from '@pazzera/db';
+import { AnalyticsRepo, sumStrings } from '@pazzera/db';
 
 export const GET = withApi(async () => {
   const session = await requireSession();
@@ -56,19 +56,23 @@ export const GET = withApi(async () => {
   ]);
 
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const todayAgg = await prisma.payment.aggregate({
-    where: { payerUserId: session.userId, status: { in: ['settled', 'distributed'] }, settledAt: { gte: since24h } },
-    _sum: { amountBaseUnits: true },
-    _count: { _all: true },
-  });
+  const [todayAgg, todayPayments] = await Promise.all([
+    prisma.payment.count({
+      where: { payerUserId: session.userId, status: { in: ['settled', 'distributed'] }, settledAt: { gte: since24h } },
+    }),
+    prisma.payment.findMany({
+      where: { payerUserId: session.userId, status: { in: ['settled', 'distributed'] }, settledAt: { gte: since24h } },
+      select: { amountBaseUnits: true },
+    }),
+  ]);
 
   return new Response(
     JSON.stringify({
       user: user ? { username: user.username, displayName: user.displayName, isArtist: user.isArtist } : null,
       wallet: wallet ? { address: wallet.address, balanceUsdc: wallet.balanceUsdc } : null,
       stats: {
-        streamsToday: todayAgg._count._all,
-        spentToday: Number((todayAgg._sum.amountBaseUnits ?? 0n).toString()) / 1_000_000,
+        streamsToday: todayAgg,
+        spentToday: Number(sumStrings(todayPayments, 'amountBaseUnits')) / 1_000_000,
       },
       recentlyPlayed: recent.map((r) => ({
         id: r.song.id,

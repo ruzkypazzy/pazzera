@@ -9,10 +9,29 @@
  * All amounts handled in USDC base units (BigInt as string).
  */
 import { prisma } from '@pazzera/db';
+import { sumStrings } from '@pazzera/db/utils/big-arith';
 import { logger, getEnv, AppError, BlockchainError } from '@pazzera/core';
 import { getWalletProvider } from '../wallets/factory';
 import { signAuthorizationFor, transferFor } from '../wallets/local-dev-provider';
 import { usdcToBaseUnits, baseUnitsToUsdc } from '../adapters/usdc';
+
+/**
+ * Bump `totalSpendBaseUnits` by `delta` (string base-units). `String!`
+ * columns can't be updated with Prisma's typed `increment` shorthand, so
+ * we read the current value, run bigint arithmetic, then write back.
+ */
+async function incrementWalletAnalyticsSpend(walletId: string, delta: string): Promise<void> {
+  const existing = await prisma.walletAnalytics.findUnique({
+    where: { walletId },
+    select: { totalSpendBaseUnits: true },
+  });
+  const newTotal = (sumStrings([{ totalSpendBaseUnits: existing?.totalSpendBaseUnits ?? '0' }], 'totalSpendBaseUnits') + BigInt(delta)).toString();
+  await prisma.walletAnalytics.upsert({
+    where: { walletId },
+    create: { walletId, totalSpendBaseUnits: newTotal, lastSpendAt: new Date() },
+    update: { totalSpendBaseUnits: newTotal, lastSpendAt: new Date() },
+  });
+}
 import { getActiveProvider as getCircleProvider, CircleMockProvider } from '../circle/factory';
 import type { Address, Hex } from 'viem';
 
@@ -181,16 +200,16 @@ export class WalletService {
     // Daily cap check (for user-initiated withdraws only)
     if (opts.type === 'withdraw') {
       const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const last24hSum = await prisma.walletTransaction.aggregate({
+      const last24hRows = await prisma.walletTransaction.findMany({
         where: {
           walletId: wallet.id,
           type: 'withdraw',
           status: { in: ['confirmed'] },
           confirmedAt: { gte: since24h },
         },
-        _sum: { amountBaseUnits: true },
+        select: { amountBaseUnits: true },
       });
-      const last24h = BigInt(last24hSum._sum.amountBaseUnits ?? '0');
+      const last24h = sumStrings(last24hRows, 'amountBaseUnits');
       const amount = usdcToBaseUnits(opts.amountUsdc);
       const cap = usdcToBaseUnits(env.WALLET_DAILY_WITHDRAW_CAP_USDC.toString());
       if (last24h + amount > cap) {
@@ -259,18 +278,7 @@ export class WalletService {
           },
         });
         // Bump analytics
-        await prisma.walletAnalytics.upsert({
-          where: { walletId: wallet.id },
-          create: {
-            walletId: wallet.id,
-            totalSpendBaseUnits: amountBaseUnits,
-            lastSpendAt: new Date(),
-          },
-          update: {
-            totalSpendBaseUnits: { increment: BigInt(amountBaseUnits) },
-            lastSpendAt: new Date(),
-          },
-        });
+        await incrementWalletAnalyticsSpend(wallet.id, amountBaseUnits);
         return { txHash: r.txHash, blockNumber: r.blockNumber, status: r.status };
       }
 
@@ -341,16 +349,16 @@ export class WalletService {
       });
     }
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const last24h = await prisma.walletTransaction.aggregate({
+    const last24hRows = await prisma.walletTransaction.findMany({
       where: {
         walletId: wallet.id,
         type: 'x402_settlement',
         status: { in: ['confirmed', 'submitted'] },
         confirmedAt: { gte: since24h },
       },
-      _sum: { amountBaseUnits: true },
+      select: { amountBaseUnits: true },
     });
-    const used = BigInt(last24h._sum.amountBaseUnits ?? '0');
+    const used = sumStrings(last24hRows, 'amountBaseUnits');
     if (used + requestedValue > dailyCap) {
       throw new AppError('CONFLICT', 'Daily x402 cap exceeded', 409, {
         capBaseUnits: dailyCap.toString(),

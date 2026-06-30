@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { getCurrentSession } from '@/lib/session';
 import { prisma } from '@pazzera/core';
+import { sumStrings } from '@pazzera/db/utils/big-arith';
 import { ListenerDashboard } from '@/components/dashboard/listener-dashboard';
 import { WalletStatusBanner } from '@/components/auth/wallet-status-banner';
 
@@ -11,7 +12,7 @@ export default async function DashboardPage() {
   if (!session) redirect('/sign-in');
 
   // Server-render the initial payload so the client has data on first paint.
-  const [user, wallet, recent, trending, recommended, todayAgg] = await Promise.all([
+  const [user, wallet, recent, trending, recommended, todayPayments, todayStreamsCount] = await Promise.all([
     prisma.user.findUnique({
       where: { id: session.userId },
       select: { username: true, displayName: true, isArtist: true },
@@ -38,10 +39,12 @@ export default async function DashboardPage() {
       take: 6,
       select: { id: true, title: true, artistName: true, coverUrl: true, publishedPriceUsdc: true },
     }),
-    prisma.payment.aggregate({
+    prisma.payment.findMany({
       where: { payerUserId: session.userId, status: { in: ['settled', 'distributed'] }, settledAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
-      _sum: { amountBaseUnits: true },
-      _count: { _all: true },
+      select: { amountBaseUnits: true },
+    }),
+    prisma.stream.count({
+      where: { userId: session.userId, startedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
     }),
   ]);
 
@@ -49,8 +52,8 @@ export default async function DashboardPage() {
     user: { username: user!.username, displayName: user!.displayName, isArtist: user!.isArtist },
     wallet: wallet ? { address: wallet.address, balanceUsdc: wallet.balanceUsdc } : null,
     stats: {
-      streamsToday: todayAgg._count._all,
-      spentToday: Number((todayAgg._sum.amountBaseUnits ?? 0n).toString()) / 1_000_000,
+      streamsToday: todayStreamsCount,
+      spentToday: Number(sumStrings(todayPayments, 'amountBaseUnits')) / 1_000_000,
     },
     recentlyPlayed: recent.map((r: { song: { id: string; title: string; artistName: string; coverUrl: string | null; durationSeconds: number } }) => ({
       id: r.song.id,
@@ -59,7 +62,7 @@ export default async function DashboardPage() {
       coverUrl: r.song.coverUrl,
       durationSec: r.song.durationSeconds,
     })),
-    trending: trending.map((t: { id: string; title: string; artistName: string; coverUrl: string | null; durationSeconds: number; playCount: number; publishedPriceUsdc: number }) => ({
+    trending: trending.map((t: { id: string; title: string; artistName: string; coverUrl: string | null; durationSeconds: number; playCount: number; publishedPriceUsdc: string | null }) => ({
       id: t.id,
       title: t.title,
       artist: t.artistName,
@@ -68,7 +71,7 @@ export default async function DashboardPage() {
       playCount: t.playCount,
       publishedPriceUsdc: t.publishedPriceUsdc,
     })),
-    recommended: recommended.map((r: { id: string; title: string; artistName: string; coverUrl: string | null; durationSeconds: number; publishedPriceUsdc: number }) => ({
+    recommended: recommended.map((r: { id: string; title: string; artistName: string; coverUrl: string | null; durationSeconds: number; publishedPriceUsdc: string | null }) => ({
       id: r.id,
       title: r.title,
       artist: r.artistName,

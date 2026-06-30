@@ -15,3 +15,4 @@ export * from './split/decide';
 export * from './discovery/decide';
 export * from './workers/wallet-reconcile-worker';
 export { driftCounters, resetDriftCounters } from './utils/drift-counters';
+export { toJsonValue, toJsonValueOrUnset } from '@pazzera/db/utils/json-cast';

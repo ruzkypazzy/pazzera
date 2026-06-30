@@ -8,11 +8,13 @@ export const GET = withApi(async () => {
   const session = await requireSession();
   const me = await prisma.user.findUnique({
     where: { id: session.userId },
-    select: { isArtist: true, artistId: true },
+    select: { isArtist: true },
   });
   if (!me?.isArtist) {
     throw new AppError('FORBIDDEN', 'Artist account required', 403);
   }
+  // User.id is the artistId — no separate `User.artistId` column.
+  const artistId = session.userId;
 
   const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
   const startOfToday = new Date();
@@ -33,28 +35,28 @@ export const GET = withApi(async () => {
   ] = await Promise.all([
     prisma.wallet.findUnique({ where: { userId: session.userId }, select: { balanceUsdc: true } }),
     prisma.payment.findMany({
-      where: { status: { in: ['settled', 'distributed'] }, settledAt: { gte: since30d }, song: { artistId: me.artistId ?? session.userId } },
+      where: { status: { in: ['settled', 'distributed'] }, settledAt: { gte: since30d }, song: { artistId: artistId } },
       select: { amountBaseUnits: true, settledAt: true, songId: true },
     }),
     prisma.payment.findMany({
-      where: { status: { in: ['settled', 'distributed'] }, settledAt: { gte: startOfToday }, song: { artistId: me.artistId ?? session.userId } },
+      where: { status: { in: ['settled', 'distributed'] }, settledAt: { gte: startOfToday }, song: { artistId: artistId } },
       select: { amountBaseUnits: true },
     }),
     prisma.payment.findMany({
-      where: { status: { in: ['settled', 'distributed'] }, settledAt: { gte: startOfMonth }, song: { artistId: me.artistId ?? session.userId } },
+      where: { status: { in: ['settled', 'distributed'] }, settledAt: { gte: startOfMonth }, song: { artistId: artistId } },
       select: { amountBaseUnits: true },
     }),
     prisma.payment.findMany({
-      where: { status: { in: ['settled', 'distributed'] }, song: { artistId: me.artistId ?? session.userId } },
+      where: { status: { in: ['settled', 'distributed'] }, song: { artistId: artistId } },
       select: { amountBaseUnits: true, songId: true },
     }),
     prisma.song.findFirst({
-      where: { artistId: me.artistId ?? session.userId, isPublic: true },
+      where: { artistId: artistId, isPublic: true },
       orderBy: { playCount: 'desc' },
       select: { id: true, title: true, coverUrl: true, playCount: true, songMetrics: { select: { totalRevenueBaseUnits: true } } },
     }),
     prisma.song.findMany({
-      where: { artistId: me.artistId ?? session.userId },
+      where: { artistId: artistId },
       orderBy: { createdAt: 'desc' },
       take: 10,
       select: { id: true, title: true, coverUrl: true, status: true, playCount: true, publishedPriceUsdc: true, createdAt: true },
@@ -69,7 +71,7 @@ export const GET = withApi(async () => {
       }
       // Streams
       const streams30d = await prisma.stream.findMany({
-        where: { startedAt: { gte: since30d }, song: { artistId: me.artistId ?? session.userId } },
+        where: { startedAt: { gte: since30d }, song: { artistId: artistId } },
         select: { startedAt: true },
       });
       for (const s of streams30d) {

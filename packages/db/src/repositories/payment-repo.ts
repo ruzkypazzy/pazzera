@@ -32,9 +32,15 @@ export const PaymentRepo = {
     });
   },
   async markFailed(paymentId: string, reason: string) {
+    // `Payment` has no `meta` column. Reasons get persisted as a PaymentEvent
+    // via the calling worker; here we only transition state and stamp
+    // `refundedAt` if a refund is in flight.
     return prisma.payment.update({
       where: { id: paymentId },
-      data: { status: 'failed', meta: { failureReason: reason } as unknown as object },
+      data: {
+        status: 'failed',
+        refundedAt: reason.startsWith('refund:') ? new Date() : undefined,
+      },
     });
   },
   async listForUser(userId: string, opts: { skip?: number; take?: number }) {

@@ -6,7 +6,7 @@
  * once per day for DailyMetrics snapshots.
  */
 import { prisma } from '../client';
-import { getEnv } from '@pazzera/core';
+import { sumStrings } from '../utils/big-arith';
 
 export const AnalyticsRepo = {
   async getDailyMetrics(date: Date) {
@@ -21,28 +21,27 @@ export const AnalyticsRepo = {
     return prisma.artistMetrics.findUnique({ where: { artistId } });
   },
   async getPlatformSummary() {
-    const env = (() => {
-      try { return getEnv(); } catch { return null; }
-    })();
-    void env;
-    // Aggregate: streams today, total earnings, DAU last 24h
+    // Aggregate: streams today, total earnings, DAU last 24h.
+    // `amountBaseUnits` is a `String!` column on Payment — Prisma 5.22
+    // doesn't allow it in `_sum` typed inputs, so we sum in memory via
+    // the shared `sumStrings` helper.
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const [streams, dau, earnings] = await Promise.all([
+    const [streams, dau, earningsRows] = await Promise.all([
       prisma.stream.count({ where: { startedAt: { gte: since24h } } }),
       prisma.stream.findMany({
         where: { startedAt: { gte: since24h } },
         select: { userId: true },
         distinct: ['userId'],
       }),
-      prisma.payment.aggregate({
+      prisma.payment.findMany({
         where: { status: { in: ['settled', 'distributed'] } },
-        _sum: { amountBaseUnits: true },
+        select: { amountBaseUnits: true },
       }),
     ]);
     return {
       streamsLast24h: streams,
       dauLast24h: dau.length,
-      totalEarningsBaseUnits: earnings._sum.amountBaseUnits?.toString() ?? '0',
+      totalEarningsBaseUnits: sumStrings(earningsRows, 'amountBaseUnits').toString(),
     };
   },
   async topSongsLast7d(limit = 20) {

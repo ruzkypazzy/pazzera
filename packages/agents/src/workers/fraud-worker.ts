@@ -17,6 +17,7 @@
 import { Worker, type Job } from 'bullmq';
 import { getQueueConnection, QUEUE_NAMES } from '@pazzera/queue';
 import { prisma } from '@pazzera/db';
+import { sumStrings } from '@pazzera/db/utils/big-arith';
 import { logger } from '@pazzera/core';
 import {
   detectStreamFarm,
@@ -137,9 +138,9 @@ async function runPayoutAbuseDetector(): Promise<number> {
       prisma.payout.count({ where: { recipientWalletId: w.id, createdAt: { gte: since24h } } }),
       prisma.payout.count({ where: { recipientWalletId: w.id, createdAt: { gte: since7d } } }),
       prisma.payout.count({ where: { recipientWalletId: w.id, kind: 'deposit', createdAt: { gte: since7d } } }),
-      prisma.payout.aggregate({
+      prisma.payout.findMany({
         where: { recipientWalletId: w.id, createdAt: { gte: since7d } },
-        _sum: { amountUsdc: true },
+        select: { amountUsdc: true },
       }),
       prisma.payout.findMany({ where: { recipientWalletId: w.id, createdAt: { gte: since7d } }, distinct: ['recipientWalletId'] }),
     ]);
@@ -147,7 +148,7 @@ async function runPayoutAbuseDetector(): Promise<number> {
       walletId: w.id,
       payoutsLast24h: p24,
       payoutsLast7d: p7,
-      totalPayoutsLast7dUsdc: total7d._sum.amountUsdc ?? '0',
+      totalPayoutsLast7dUsdc: sumStrings(total7d, 'amountUsdc').toString(),
       walletBalanceUsdc: w.balanceUsdc,
       depositsLast7d: d7,
       unusualRecipientCount: fanout.length,

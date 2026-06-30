@@ -32,7 +32,7 @@ export const GET = withApi(async () => {
     getRecentEventCounts(),
     prisma.stream.count({ where: { endedAt: null } }),
     prisma.stream.count({ where: { charged: true, chargedAt: { gte: since } } }),
-    prisma.stream.count({ where: { manualReview: true, createdAt: { gte: since } } }),
+    prisma.stream.count({ where: { manualReview: true, startedAt: { gte: since } } }),
     prisma.stream.findMany({
       where: { startedAt: { gte: new Date(Date.now() - 5 * 60_000) } },
       distinct: ['userId'],

@@ -48,7 +48,7 @@ async function userSignals(userId: string): Promise<{
     where: { userId, startedAt: { gte: last30d }, totalActiveMs: { gt: 0 } },
     select: {
       totalActiveMs: true,
-      song: { select: { id: true, durationSeconds: true, genres: true, title: true, artistId: true } },
+      song: { select: { id: true, durationSeconds: true, title: true, artistId: true } },
     },
     orderBy: { startedAt: 'desc' },
     take: 200,

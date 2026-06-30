@@ -10,6 +10,7 @@
  */
 import type { PrismaClient } from '@prisma/client';
 import { hashInput } from './decision-hash';
+import { toJsonValueOrUnset } from '@pazzera/db/utils/json-cast';
 
 export interface RecordDecisionInput {
   prisma: PrismaClient;
@@ -44,8 +45,8 @@ export async function recordDecision(p: RecordDecisionInput): Promise<string> {
       decision: p.decision,
       confidence: Math.max(0, Math.min(100, Math.round(p.confidence))),
       reasons: p.reasons,
-      categoryScores: p.categoryScores ?? undefined,
-      inputs: p.rawInputs ?? undefined,
+      categoryScores: toJsonValueOrUnset(p.categoryScores),
+      inputs: toJsonValueOrUnset(p.rawInputs),
       latencyMs: p.latencyMs,
       retries: p.retries ?? 0,
       warnings: p.warnings ?? [],
@@ -61,9 +62,9 @@ export async function recordDecision(p: RecordDecisionInput): Promise<string> {
       decision: p.decision,
       confidence: Math.max(0, Math.min(100, Math.round(p.confidence))),
       reasons: p.reasons,
-      categoryScores: p.categoryScores ?? undefined,
+      categoryScores: toJsonValueOrUnset(p.categoryScores),
       latencyMs: p.latencyMs,
-      retries: { increment: 1 },
+      retries: 1,
     },
   });
   return row.id;

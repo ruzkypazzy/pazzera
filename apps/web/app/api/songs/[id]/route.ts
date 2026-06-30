@@ -2,6 +2,7 @@
  * GET /api/songs/[id]
  */
 import { withApi, prisma, AppError } from '@pazzera/core';
+import { sumStrings } from '@pazzera/db/utils/big-arith';
 
 export const GET = withApi(async ({ req }) => {
   const url = new URL(req.url);
@@ -51,17 +52,20 @@ export const GET = withApi(async ({ req }) => {
         publishedPriceUsdc: song.publishedPriceUsdc,
         playCount: song.playCount,
         totalEarnedUsdc: (
-          Number((await prisma.payment.aggregate({
-            where: { songId: song.id, status: { in: ['settled', 'distributed'] } },
-            _sum: { amountBaseUnits: true },
-          }))._sum.amountBaseUnits ?? 0n) / 1_000_000
+          Number(sumStrings(
+            await prisma.payment.findMany({
+              where: { songId: song.id, status: { in: ['settled', 'distributed'] } },
+              select: { amountBaseUnits: true },
+            }),
+            'amountBaseUnits',
+          )) / 1_000_000
         ).toString(),
         completionRate,
         recipients: song.recipients.map((r) => ({
           username: r.username,
           role: r.role,
-          percentageBps: r.percentageBps,
-          walletAddress: r.user.wallet?.address ?? r.externalWalletAddress ?? undefined,
+          percentageBps: r.splitPercentageBps,
+          walletAddress: r.user?.wallet?.address ?? r.externalWalletAddress ?? undefined,
         })),
         trend,
       },

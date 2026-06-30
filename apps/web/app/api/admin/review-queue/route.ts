@@ -12,7 +12,7 @@ import { logger } from '@pazzera/core';
 
 async function requireAdmin() {
   const session = await requireSession();
-  const me = await prisma.user.findUnique({ where: { id: session.userId }, select: { role: true, email: true } });
+  const me = await prisma.user.findUnique({ where: { id: session.userId }, select: { id: true, role: true, email: true } });
   const allowEmails = (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
   const isAdmin = me?.role === 'admin' || allowEmails.includes(me?.email ?? '');
   if (!isAdmin) throw new AppError('FORBIDDEN', 'Admin access required', 403);

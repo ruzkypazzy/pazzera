@@ -19,9 +19,68 @@
 import { Worker, type Job } from 'bullmq';
 import { getQueueConnection, QUEUE_NAMES } from '@pazzera/queue';
 import { prisma } from '@pazzera/db';
+import { sumStrings, coerceStringAmount } from '@pazzera/db/utils/big-arith';
 import { logger, getEnv } from '@pazzera/core';
 import { getArcPublicClient, usdcAddress, baseUnitsToUsdc } from '@pazzera/blockchain';
 import type { Address, Hex } from 'viem';
+
+/**
+ * Read-modify-write for `WalletAnalytics.{totalDeposits,totalSpend}BaseUnits`
+ * — both are `String!` columns that Prisma 5.22 doesn't support via
+ * `{ increment: BigInt() }`. Centralized so the indexer + analytics worker
+ * stay in sync via a single audited math path.
+ */
+async function addToWalletAnalyticsTotals(
+  walletId: string,
+  deltaBaseUnits: string,
+  side: 'deposit' | 'spend',
+): Promise<void> {
+  const existing = await prisma.walletAnalytics.findUnique({
+    where: { walletId },
+    select: { totalDepositsBaseUnits: true, totalSpendBaseUnits: true },
+  });
+  const depKey = 'totalDepositsBaseUnits' as const;
+  const spdKey = 'totalSpendBaseUnits' as const;
+  const newDeposit =
+    side === 'deposit'
+      ? (sumStrings([{ [depKey]: existing?.totalDepositsBaseUnits ?? '0' }], depKey) + BigInt(deltaBaseUnits)).toString()
+      : existing?.totalDepositsBaseUnits ?? '0';
+  const newSpend =
+    side === 'spend'
+      ? (sumStrings([{ [spdKey]: existing?.totalSpendBaseUnits ?? '0' }], spdKey) + BigInt(deltaBaseUnits)).toString()
+      : existing?.totalSpendBaseUnits ?? '0';
+  const stamp = new Date();
+  await prisma.walletAnalytics.upsert({
+    where: { walletId },
+    create: {
+      walletId,
+      totalDepositsBaseUnits: newDeposit,
+      totalSpendBaseUnits: newSpend,
+      lastIndexedAt: stamp,
+      ...(side === 'deposit' ? { lastDepositAt: stamp } : { lastSpendAt: stamp }),
+    },
+    update: {
+      totalDepositsBaseUnits: newDeposit,
+      totalSpendBaseUnits: newSpend,
+      lastIndexedAt: stamp,
+      ...(side === 'deposit' ? { lastDepositAt: stamp } : { lastSpendAt: stamp }),
+    },
+  });
+}
+
+/**
+ * Upgrade the parsed JsonValue to a typed number/string for fields like
+ * `IndexerCursor.lastBlock`. The `lastBlock` came from a Json blob and
+ * TS only knows its primitive.
+ */
+function jsonToNumber(value: unknown, fallback = 0): number {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  }
+  return fallback;
+}
 
 const TRANSFER_EVENT_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef' as Hex;
 
@@ -72,7 +131,6 @@ export class IndexerService {
           blockNumber: event.blockNumber,
           counterpartyAddress: isIncoming ? event.from : event.to,
           confirmedAt: new Date(),
-          meta: { logIndex: event.logIndex } as object,
         },
       }),
       prisma.wallet.update({
@@ -82,30 +140,19 @@ export class IndexerService {
           lastIndexedBlock: event.blockNumber,
         },
       }),
-      prisma.walletAnalytics.upsert({
-        where: { walletId: wallet.id },
-        create: {
-          walletId: wallet.id,
-          totalDepositsBaseUnits: isIncoming ? amountBaseUnits : '0',
-          totalSpendBaseUnits: isOutgoing ? amountBaseUnits : '0',
-          lastIndexedAt: new Date(),
-          lastDepositAt: isIncoming ? new Date() : null,
-          lastSpendAt: isOutgoing ? new Date() : null,
-          healthScore: 100,
-        },
-        update: {
-          totalDepositsBaseUnits: isIncoming
-            ? { increment: BigInt(amountBaseUnits) }
-            : undefined,
-          totalSpendBaseUnits: isOutgoing
-            ? { increment: BigInt(amountBaseUnits) }
-            : undefined,
-          lastIndexedAt: new Date(),
-          lastDepositAt: isIncoming ? new Date() : undefined,
-          lastSpendAt: isOutgoing ? new Date() : undefined,
-        },
-      }),
     ]);
+
+    // WalletAnalytics totals use String! columns; Prisma 5.22 doesn't
+    // expose them via the typed `{ increment }` shorthand, so call the
+    // shared read-modify-write helper outside the transaction (it has
+    // its own read, so wrapping it inside $transaction would just
+    // serialize the row lock for no benefit).
+    await addToWalletAnalyticsTotals(
+      wallet.id,
+      amountBaseUnits,
+      isIncoming ? 'deposit' : 'spend',
+    );
+
   }
 }
 
@@ -127,7 +174,7 @@ export async function runWalletIndexerWorker() {
 
       let processed = 0;
       for (const wallet of wallets) {
-        const cursor = (wallet.indexerCursor as IndexerCursor | null) ?? {
+        const cursor: IndexerCursor = (wallet.indexerCursor as unknown as IndexerCursor | null) ?? {
           lastBlock: 0,
           lastAt: new Date(0).toISOString(),
         };
@@ -168,12 +215,13 @@ export async function runWalletIndexerWorker() {
           }
           processed += 1;
           const newCursor: IndexerCursor = { lastBlock: end, lastAt: new Date().toISOString() };
-          // Health: penalize lag
+          // Health: penalize lag. (`healthScore` lives on WalletAnalytics,
+          // NOT on Wallet — schema doesn't expose it there.)
           const lag = head - end;
           const healthScore = Math.max(0, Math.min(100, 100 - Math.floor(lag / 100)));
           await prisma.wallet.update({
             where: { id: wallet.id },
-            data: { indexerCursor: newCursor as object, healthScore },
+            data: { indexerCursor: newCursor as object },
           });
           await prisma.walletAnalytics.upsert({
             where: { walletId: wallet.id },

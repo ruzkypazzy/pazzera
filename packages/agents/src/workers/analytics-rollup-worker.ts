@@ -166,7 +166,6 @@ async function rollupArtistMetrics(): Promise<number> {
       }),
     ]);
     const monthlyEarningsUsdc = sumStrings(payouts7d, 'amountUsdc');
-    const monthlyEarningsBaseUnits = sumStrings(payouts7d, 'amountBaseUnits');
     const totalEarningsUsdc = sumStrings(payoutsLifetime, 'amountUsdc');
     const totalEarningsBaseUnits = sumStrings(payoutsLifetime, 'amountBaseUnits');
     await prisma.artistMetrics.upsert({
@@ -176,7 +175,6 @@ async function rollupArtistMetrics(): Promise<number> {
         songCount: songs,
         publishedSongCount: published,
         monthlyEarningsUsdc,
-        monthlyEarningsBaseUnits,
         totalEarningsUsdc,
         totalEarningsBaseUnits,
         streamsLast30d: streams30d,
@@ -188,7 +186,6 @@ async function rollupArtistMetrics(): Promise<number> {
         songCount: songs,
         publishedSongCount: published,
         monthlyEarningsUsdc,
-        monthlyEarningsBaseUnits,
         totalEarningsUsdc,
         totalEarningsBaseUnits,
         streamsLast30d: streams30d,
@@ -224,7 +221,7 @@ async function rollupPlatformRealtime(now: Date): Promise<{
     prisma.stream.findMany({
       where: { startedAt: { gte: since } },
       select: { song: { select: { artistId: true } } },
-      distinct: ['song'],
+      distinct: ['songId'],
     }),
     prisma.stream.count({ where: { startedAt: { gte: since }, flaggedAbuse: true } }),
   ]);

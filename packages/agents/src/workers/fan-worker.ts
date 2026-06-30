@@ -178,7 +178,7 @@ export async function runFanWorker() {
               where: { id: input.songId },
               select: { publishedPriceUsdc: true },
             });
-            const amountUsdc = song?.publishedPriceUsdc ?? decision.signals.suggestedPriceUsdc ?? '0.003';
+            const amountUsdc = String(song?.publishedPriceUsdc ?? decision.signals.suggestedPriceUsdc ?? '0.003');
             const tier = ((['0.001', '0.002', '0.003', '0.004', '0.005'] as const).find((t) => Number.parseFloat(t) === Number.parseFloat(amountUsdc)) ?? '0.003') as '0.001' | '0.002' | '0.003' | '0.004' | '0.005';
             const nonce = await issueAndStoreNonce({ streamId, userId: input.userId, amountUsdc });
             await emitPaymentDue({
