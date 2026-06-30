@@ -6,4 +6,5 @@
  */
 import { getEnv } from '@pazzera/core';
 export * from './service';
-export type { StorageService, PutOptions, GetUrlOptions } from './service';
+export * from './keys';
+export type { StorageService, PutOptions, GetUrlOptions, PresignedPutOptions } from './service';

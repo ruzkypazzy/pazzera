@@ -224,6 +224,14 @@ model Song {
   coverUrl              String
   audioKey              String
   audioUrl              String
+  previewKey            String?
+  previewUrl            String?
+  coverThumbKey         String?
+  coverMediumKey        String?
+  coverThumbUrl         String?
+  coverMediumUrl        String?
+  waveformKey           String?
+  waveformUrl           String?
 
   // Audio characteristics
   durationSeconds       Int
@@ -231,8 +239,21 @@ model Song {
   audioSampleRateHz     Int?
   audioChannels         Int?
   audioPeakDb           Float?
-  audioHash             String?
-  waveformPeaks         Json?    // array of {t, v} for visual waveform (phase 6)
+  audioCodec            String?
+  audioContainer        String?
+  audioHash             String?            // SHA-256 binary
+  acousticHash          String?            // content-based fingerprint
+  audioLufsIntegrated   Float?            // -70 = silence
+  audioLufsRange        Float?
+  audioTruePeakDb       Float?
+  audioSilenceRatio     Float?            // 0..1
+  waveformPeaks         Json?            // {min: number[], max: number[]} normalized 0..1
+
+  // Cover art processing
+  coverWidthPx          Int?
+  coverHeightPx         Int?
+  coverIsSquare         Boolean?
+  coverAspectRatio      Float?
 
   // Pricing
   artistPriceUsdc       String   // requested by artist
@@ -250,17 +271,24 @@ model Song {
   curatorReviewedAt     DateTime?
 
   // Lifecycle (see SongStatus)
-  //   draft          → metadata only, no media
-  //   uploaded       → media stored, not yet reviewed
-  //   under_review   → curator job in flight
-  //   approved       → curator approved, but not yet visible publicly
-  //   published      → live in catalog (isPublic=true)
-  //   rejected       → curator rejected; artist may revise
-  //   suspended      → admin-pulled from catalog
+  //   draft                  → metadata only, no media
+  //   uploading              → presigned URL issued, client uploading
+  //   processing             → media stored, processing pipeline started
+  //   metadata_extracted     → ffprobe + fingerprint done
+  //   waveform_generated     → peaks JSON stored
+  //   curator_queued         → curator job enqueued
+  //   approved               → curator approved, not yet public
+  //   published              → live in catalog (isPublic=true)
+  //   rejected               → curator rejected; artist may revise
+  //   failed_processing      → pipeline error
   status                String    @default("draft")
   publishedAt           DateTime?
   suspendedAt           DateTime?
   suspendedReason       String?
+  // Per-step error tracking
+  errorStep             String?           // 'metadata' | 'waveform' | 'preview' | 'cover' | 'curator' | 'finalize'
+  errorMessage          String?
+  errorRetries          Int      @default(0)
 
   isPublic              Boolean   @default(false)
   playCount             Int       @default(0)
@@ -773,6 +801,45 @@ model Session {
   @@index([expiresAt])
   @@index([inactivityExpiresAt])
   @@index([sessionTokenHash])
+}
+
+// ══════════════════════════════════════════════════════════════════
+// UPLOAD SESSIONS (Phase 6)
+// ══════════════════════════════════════════════════════════════════
+
+// A presigned-upload session. Created when the client requests upload
+// permission, completed when the client calls finalize. Stores the
+// expected MIME + size, the storage key, the issued ticket.
+//
+// State:
+//   pending   — ticket issued, client hasn't uploaded yet
+//   uploaded  — client has called finalize, pipeline started
+//   failed    — ticket expired or validation failed
+model UploadSession {
+  id                  String   @id @default(cuid())
+  userId              String
+  songId              String
+  kind                String   // 'audio' | 'cover'
+  storageKey          String
+  presignedUrl        String
+  expiresAt           DateTime
+  // Expected metadata
+  expectedMime        String
+  expectedSizeBytes   Int
+  expectedExt         String
+  // Resulting object info
+  uploadedBytes       Int?
+  uploadedMime        String?
+  state               String   @default("pending")
+  // Lifecycle
+  createdAt           DateTime @default(now())
+  finalizedAt         DateTime?
+  failedAt            DateTime?
+  failureReason       String?
+
+  @@index([userId, state])
+  @@index([songId, kind])
+  @@index([expiresAt])
 }
 
 // AuthEvent — anti-abuse log. Drives AuthRiskScore.

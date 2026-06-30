@@ -1,5 +1,5 @@
 {
-  "name": "@pazzera/agents",
+  "name": "@pazzera/upload",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,17 +10,16 @@
     "./*": "./src/*.ts"
   },
   "scripts": {
-    "start": "tsx src/workers/run.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@pazzera/blockchain": "workspace:*",
     "@pazzera/core": "workspace:*",
     "@pazzera/db": "workspace:*",
     "@pazzera/queue": "workspace:*",
-    "@pazzera/realtime": "workspace:*",
-    "@pazzera/upload": "workspace:*"
+    "@pazzera/storage": "workspace:*",
+    "bullmq": "^5.7.0",
+    "ioredis": "^5.4.1"
   },
   "devDependencies": {
     "tsx": "^4.15.0",

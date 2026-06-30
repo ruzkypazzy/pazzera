@@ -12,3 +12,4 @@ export * from './services/otp-service';
 export * from './services/session-service';
 export * from './services/email-service';
 export * from './services/auth-events';
+// Note: upload pipeline is in @pazzera/upload. UI/handlers import from there directly.

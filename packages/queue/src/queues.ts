@@ -19,6 +19,11 @@ export const QUEUE_NAMES = {
   authCleanup: 'auth:cleanup',
   maintenance: 'maintenance',
   analyticsRollup: 'analytics:rollup',
+  uploadProcessAudio: 'upload:process-audio',
+  uploadProcessCover: 'upload:process-cover',
+  uploadGenerateWaveform: 'upload:generate-waveform',
+  uploadGeneratePreview: 'upload:generate-preview',
+  uploadCurator: 'upload:curator',
 } as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
@@ -52,6 +57,15 @@ export interface WalletProvisionJobPayload {
 
 export interface AuthCleanupJobPayload {
   task: 'expire_otps' | 'expire_sessions' | 'gc_auth_events';
+}
+
+export interface UploadJobPayload {
+  uploadId: string;
+  songId: string;
+  /** R2 key of the uploaded artifact (or local path during dev). */
+  sourceKey: string;
+  /** Re-encode steps that remain to be performed. */
+  steps: Array<'metadata' | 'waveform' | 'preview' | 'cover' | 'nsfw' | 'curator'>;
 }
 
 export interface PaymentSettleJobPayload {
@@ -148,6 +162,44 @@ export const enqueue = {
     getQueue(QUEUE_NAMES.walletProvision).add('wallet.provision', payload, opts),
   authCleanup: (payload: AuthCleanupJobPayload, opts?: JobsOptions) =>
     getQueue(QUEUE_NAMES.authCleanup).add(payload.task, payload, opts),
+  uploadProcessAudio: (payload: UploadJobPayload, opts?: JobsOptions) =>
+    getQueue(QUEUE_NAMES.uploadProcessAudio).add('upload.audio', payload, {
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 10_000 },
+      removeOnComplete: { count: 500, age: 24 * 3600 },
+      removeOnFail: { count: 1000, age: 7 * 24 * 3600 },
+      ...(opts ?? {}),
+    }),
+  uploadProcessCover: (payload: UploadJobPayload, opts?: JobsOptions) =>
+    getQueue(QUEUE_NAMES.uploadProcessCover).add('upload.cover', payload, {
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 5_000 },
+      removeOnComplete: { count: 500, age: 24 * 3600 },
+      removeOnFail: { count: 1000, age: 7 * 24 * 3600 },
+      ...(opts ?? {}),
+    }),
+  uploadGenerateWaveform: (payload: UploadJobPayload, opts?: JobsOptions) =>
+    getQueue(QUEUE_NAMES.uploadGenerateWaveform).add('upload.waveform', payload, {
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 5_000 },
+      removeOnComplete: { count: 500, age: 24 * 3600 },
+      removeOnFail: { count: 1000, age: 7 * 24 * 3600 },
+      ...(opts ?? {}),
+    }),
+  uploadGeneratePreview: (payload: UploadJobPayload, opts?: JobsOptions) =>
+    getQueue(QUEUE_NAMES.uploadGeneratePreview).add('upload.preview', payload, {
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 5_000 },
+      removeOnComplete: { count: 500, age: 24 * 3600 },
+      removeOnFail: { count: 1000, age: 7 * 24 * 3600 },
+      ...(opts ?? {}),
+    }),
+  uploadCurator: (payload: UploadJobPayload, opts?: JobsOptions) =>
+    getQueue(QUEUE_NAMES.uploadCurator).add('upload.curator', payload, {
+      attempts: 1,
+      removeOnComplete: { count: 500, age: 24 * 3600 },
+      ...(opts ?? {}),
+    }),
   maintenance: (payload: MaintenanceJobPayload, opts?: JobsOptions) =>
     getQueue(QUEUE_NAMES.maintenance).add(payload.task, payload, opts),
   analyticsRollup: (payload: MaintenanceJobPayload, opts?: JobsOptions) =>

@@ -11,6 +11,10 @@ import { runDiscoveryWorker } from './discovery-worker';
 import { runWalletProvisionWorker } from './wallet-provision-worker';
 import { runAuthCleanupWorker } from './auth-cleanup-worker';
 import { runWalletIndexerWorker } from './wallet-indexer-worker';
+import { runAudioWorker } from './upload/audio-worker';
+import { runWaveformWorker } from './upload/waveform-worker';
+import { runPreviewWorker } from './upload/preview-worker';
+import { runCoverWorker } from './upload/cover-worker';
 
 async function main() {
   logger.info('workers:starting');
@@ -21,6 +25,10 @@ async function main() {
   const walletProvision = await runWalletProvisionWorker();
   const walletIndexer = await runWalletIndexerWorker();
   const authCleanup = await runAuthCleanupWorker();
+  const uploadAudio = await runAudioWorker();
+  const uploadWaveform = await runWaveformWorker();
+  const uploadPreview = await runPreviewWorker();
+  const uploadCover = await runCoverWorker();
   logger.info('workers:ready');
 
   // Recurring jobs
@@ -49,6 +57,10 @@ async function main() {
       walletProvision.close(),
       walletIndexer.close(),
       authCleanup.close(),
+      uploadAudio.close(),
+      uploadWaveform.close(),
+      uploadPreview.close(),
+      uploadCover.close(),
     ]);
     process.exit(0);
   };

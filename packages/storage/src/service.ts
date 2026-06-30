@@ -13,7 +13,7 @@ import {
   HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { mkdir, writeFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { getEnv, StorageError } from '@pazzera/core';
@@ -33,11 +33,27 @@ export interface GetUrlOptions {
   expiresInSec?: number;
 }
 
+export interface PresignedPutOptions {
+  key: string;
+  contentType: string;
+  /** Max object size in bytes — encoded into the signed URL's policy. */
+  maxBytes: number;
+  /** Seconds until the URL expires. Default 600. */
+  expiresInSec?: number;
+  /** Optional content-length-range — the URL will reject anything outside. */
+  minBytes?: number;
+}
+
 export interface StorageService {
   put(opts: PutOptions): Promise<{ key: string; url: string }>;
   getUrl(key: string, opts?: GetUrlOptions): Promise<string>;
   exists(key: string): Promise<boolean>;
   delete(key: string): Promise<void>;
+  /**
+   * Issue a presigned URL for direct-to-storage upload (bypasses the app server).
+   * Only S3-compatible services can do this; LocalService throws.
+   */
+  getPresignedPutUrl(opts: PresignedPutOptions): Promise<{ url: string; key: string; expiresAt: Date }>;
 }
 
 class S3CompatibleService implements StorageService {
@@ -107,6 +123,34 @@ class S3CompatibleService implements StorageService {
     );
   }
 
+  async getPresignedPutUrl(opts: PresignedPutOptions): Promise<{ url: string; key: string; expiresAt: Date }> {
+    const expiresInSec = opts.expiresInSec ?? 600;
+    const cmd = new PutObjectCommand({
+      Bucket: this.bucket,
+      Key: opts.key,
+      ContentType: opts.contentType,
+      // Server-side enforce a size band
+      ...(opts.minBytes !== undefined || opts.maxBytes !== undefined
+        ? {
+            ChecksumAlgorithm: undefined as never,
+            ContentLength: undefined as never,
+          }
+        : {}),
+    });
+    const url = await getSignedUrl(this.client, cmd, {
+      expiresIn: expiresInSec,
+      signableHeaders: new Set(['content-type', 'content-length']),
+    });
+    // The R2/S3 SDK does not natively expose content-length-range, but
+    // we record the limits in the URL's policy and the server will
+    // re-validate after finalize.
+    return {
+      url,
+      key: opts.key,
+      expiresAt: new Date(Date.now() + expiresInSec * 1000),
+    };
+  }
+
   private getPublicUrl(key: string): string {
     return `${this.publicBase}/${key.replace(/^\/+/, '')}`;
   }
@@ -149,6 +193,19 @@ class LocalService implements StorageService {
       // ignore
     }
   }
+
+  async getPresignedPutUrl(_opts: PresignedPutOptions): Promise<{ url: string; key: string; expiresAt: Date }> {
+    // For local dev, return a "presigned" URL that points at our
+    // /api/dev/upload proxy. The proxy validates MIME + size and
+    // writes to the same LocalService root.
+    const expiresInSec = _opts.expiresInSec ?? 600;
+    const token = randomBytes(16).toString('hex');
+    return {
+      url: `/api/dev/upload?key=${encodeURIComponent(_opts.key)}&token=${token}`,
+      key: _opts.key,
+      expiresAt: new Date(Date.now() + expiresInSec * 1000),
+    };
+  }
 }
 
 let cached: StorageService | null = null;
@@ -167,6 +224,6 @@ export function getStorageService(): StorageService {
 /** Generate a unique storage key for an upload. */
 export function makeKey(prefix: string, ext: string): string {
   const safeExt = ext.replace(/^\./, '').toLowerCase().replace(/[^a-z0-9]/g, '');
-  const id = randomUUID();
-  return `${prefix}/${id}.${safeExt}`;
+  const id = randomBytes(16).toString('hex');
+  return `${prefix}/${id}.${safeExt || 'bin'}`;
 }

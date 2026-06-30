@@ -15,6 +15,7 @@
     "migrate:deploy": "prisma migrate deploy",
     "push": "prisma db push",
     "seed": "tsx prisma/seed.ts",
+    "seed:demo": "tsx prisma/demo-seed.ts",
     "studio": "prisma studio",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
