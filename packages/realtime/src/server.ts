@@ -23,10 +23,11 @@ import {
   StreamSeekSchema,
   StreamPauseSchema,
   StreamResumeSchema,
+  PaymentAuthorizedSchema,
   MIN_TICK_INTERVAL_MS,
   MAX_INVALID_PAYLOADS,
   MAX_BUFFERED_TICKS,
-  ErrorSchema,
+  PaymentAuthorizedAckSchema,
 } from './protocol';
 import {
   startStream,
@@ -59,6 +60,20 @@ let io: IO | null = null;
 function emitError(socket: import('socket.io').Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>, payload: { code: string; message: string }, streamId?: string) {
   socket.emit('error', { code: payload.code as 'INTERNAL', message: payload.message });
   socket.emit('disconnected', { streamId: streamId ?? '', reason: 'invalid_payloads' });
+}
+
+/**
+ * Phase 9 — wire the realtime server to the blockchain facilitator service.
+ * This lazily imports so the realtime process doesn't pull in the entire
+ * blockchain package at boot.
+ */
+async function callFacilitator(opts: {
+  paymentId: string;
+  envelope: Parameters<typeof import('@pazzera/blockchain').FacilitatorService.settle>[0]['envelope'];
+  nonce: string;
+}) {
+  const { FacilitatorService } = await import('@pazzera/blockchain');
+  return FacilitatorService.settle(opts);
 }
 
 export async function startRealtimeServer(port = Number(process.env.PORT ?? 3001)) {
@@ -237,6 +252,90 @@ export async function startRealtimeServer(port = Number(process.env.PORT ?? 3001
       }
       socket.emit('ack_tick', { streamId: raw.streamId, timestamp: Date.now(), accumulatedMs: -1, thresholdCrossed: false });
       logger.info({ accepted, rejected, streamId: raw.streamId }, 'realtime:flush_buffer');
+    });
+
+    // ─── payment_authorized (Phase 9) ──────────────────
+    // Client returns signed x402 envelope after receiving payment_due.
+    // Rate limited to 1/2s per socket.
+    socket.on('payment_authorized', async (raw, ack) => {
+      try {
+        // Per-socket rate limit for payment_authorized
+        const lastAuthAt = (socket.data as unknown as { lastPaymentAuthorizedAt?: number }).lastPaymentAuthorizedAt ?? 0;
+        const now = Date.now();
+        if (now - lastAuthAt < 2_000) {
+          ack?.(PaymentAuthorizedAckSchema.parse({ streamId: raw.streamId, accepted: false, reason: 'rate_limited' }));
+          return;
+        }
+        (socket.data as unknown as { lastPaymentAuthorizedAt?: number }).lastPaymentAuthorizedAt = now;
+
+        const payload = PaymentAuthorizedSchema.parse(raw);
+        // Look up the Payment row (Phase 8 fan-worker enqueued it; Phase 9
+        // creates it on payment_authorized if not provided).
+        const { prisma } = await import('@pazzera/db');
+        let paymentId = payload.paymentId;
+        if (!paymentId) {
+          const created = await prisma.payment.create({
+            data: {
+              streamId: payload.streamId,
+              songId: payload.signedPayload.to.toLowerCase(), // placeholder; we'll patch
+              payerUserId: socket.data.userId!,
+              amountUsdc: payload.signedPayload.value,
+              amountBaseUnits: payload.signedPayload.value,
+              status: 'pending',
+            },
+          });
+          paymentId = created.id;
+        }
+        const settlement = await callFacilitator({
+          paymentId,
+          envelope: {
+            from: payload.signedPayload.from as `0x${string}`,
+            to: payload.signedPayload.to as `0x${string}`,
+            value: payload.signedPayload.value,
+            validAfter: payload.signedPayload.validAfter,
+            validBefore: payload.signedPayload.validBefore,
+            nonce: payload.signedPayload.nonce as `0x${string}`,
+            v: payload.signedPayload.v,
+            r: payload.signedPayload.r as `0x${string}`,
+            s: payload.signedPayload.s as `0x${string}`,
+          },
+          nonce: payload.nonce,
+        });
+        ack?.(PaymentAuthorizedAckSchema.parse({
+          streamId: payload.streamId,
+          accepted: settlement.ok,
+          reason: settlement.reason,
+          paymentId,
+          txHash: settlement.txHash,
+          blockNumber: settlement.blockNumber,
+        }));
+        if (!settlement.ok) {
+          socket.emit('payment_failed', {
+            streamId: payload.streamId,
+            paymentId,
+            reason: settlement.reason === 'invalid_signature' ? 'chain_error' : (settlement.reason === 'expired' ? 'expired' : 'chain_error'),
+            message: settlement.reason ?? 'facilitator_failure',
+          });
+        } else {
+          // Emit payment_settled directly so the listener UI updates
+          const { emitPaymentSettled } = await import('./server');
+          await emitPaymentSettled(payload.streamId, {
+            paymentId: paymentId!,
+            songId: payload.signedPayload.to,
+            amountUsdc: payload.signedPayload.value,
+            recipientCount: 0,
+            txHash: settlement.txHash!,
+            payoutStatus: 'pending',
+          });
+        }
+      } catch (err) {
+        socket.data.invalidPayloads = (socket.data.invalidPayloads ?? 0) + 1;
+        ack?.(PaymentAuthorizedAckSchema.parse({
+          streamId: raw.streamId,
+          accepted: false,
+          reason: 'malformed_signature',
+        }));
+      }
     });
 
     // ─── disconnect ───────────────────────────────────

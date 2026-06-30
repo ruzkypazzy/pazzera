@@ -39,6 +39,8 @@ import type {
   StreamResumeAckPayload,
   ErrorPayload,
   ServerTickAckPayload,
+  PaymentAuthorizedPayload,
+  PaymentAuthorizedAck,
 } from './protocol';
 
 export interface ClientToServerEvents {
@@ -54,6 +56,8 @@ export interface ClientToServerEvents {
     sessionToken: string;
     ticks: PlaybackTickPayload[];
   }) => void;
+  /** Phase 9 — client returns a signed x402 envelope. Rate-limited + nonce-protected. */
+  'payment_authorized': (payload: PaymentAuthorizedPayload, ack?: (r: PaymentAuthorizedAck) => void) => void;
 }
 
 export interface ServerToClientEvents {

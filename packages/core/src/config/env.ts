@@ -113,6 +113,16 @@ const schema = z.object({
   // Observability (optional)
   SENTRY_DSN: z.string().optional(),
 
+  // Phase 9 — Circle UCW + x402 settlement
+  CIRCLE_API_KEY: z.string().optional(),
+  CIRCLE_ENTITY_SECRET: z.string().optional(),
+  CIRCLE_APP_ID: z.string().optional(),
+  CIRCLE_BASE_URL: z.string().default('https://api.circle.com'),
+  CIRCLE_WALLET_SET_ID: z.string().optional(),
+  GATEWAY_FACILITATOR_URL: z.string().default('https://gateway-api-testnet.circle.com'),
+  // Webhook signing secret (HMAC-SHA256 over the raw body)
+  CIRCLE_WEBHOOK_SECRET: z.string().optional(),
+
   // Demo mode (Phase 5) — hackathon-friendly preloaded data
   DEMO_MODE: z
     .string()

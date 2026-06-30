@@ -13,6 +13,7 @@ export const QUEUE_NAMES = {
   agentSplit: 'agent:split',
   agentDiscovery: 'agent:discovery',
   agentFraud: 'agent:fraud_sentinel',
+  walletReconcile: 'wallet:reconcile',
   paymentSettle: 'payment:settle',
   streamMonitor: 'stream:monitor',
   walletIndexer: 'wallet:indexer',
@@ -216,6 +217,12 @@ export const enqueue = {
     getQueue(QUEUE_NAMES.analyticsRollup).add(payload.task, payload, opts),
   fraud: (payload: FraudJobPayload, opts?: JobsOptions) =>
     getQueue(QUEUE_NAMES.agentFraud).add('fraud.scan', payload, {
+      attempts: 1,
+      removeOnComplete: { count: 50, age: 24 * 3600 },
+      ...opts,
+    }),
+  walletReconcile: (payload: MaintenanceJobPayload = { task: 'reconcile' }, opts?: JobsOptions) =>
+    getQueue(QUEUE_NAMES.walletReconcile).add('wallet.reconcile', payload, {
       attempts: 1,
       removeOnComplete: { count: 50, age: 24 * 3600 },
       ...opts,

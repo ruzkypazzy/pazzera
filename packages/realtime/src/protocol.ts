@@ -158,3 +158,36 @@ export const ErrorSchema = z.object({
 });
 
 export type ErrorPayload = z.infer<typeof ErrorSchema>;
+
+// ─── Payment authorization (Phase 9) ────────────────────────────
+
+export const PaymentAuthorizedSchema = z.object({
+  streamId: z.string(),
+  nonce: z.string().min(16),
+  signedPayload: z.object({
+    from: z.string(),
+    to: z.string(),
+    value: z.string(),
+    validAfter: z.string(),
+    validBefore: z.string(),
+    nonce: z.string(),
+    v: z.number().int().min(0).max(255),
+    r: z.string(),
+    s: z.string(),
+  }),
+  /** Optional pre-built Payment row id (we link the envelope to it). */
+  paymentId: z.string().optional(),
+});
+
+export type PaymentAuthorizedPayload = z.infer<typeof PaymentAuthorizedSchema>;
+
+export const PaymentAuthorizedAckSchema = z.object({
+  streamId: z.string(),
+  accepted: z.boolean(),
+  reason: z.string().optional(),
+  paymentId: z.string().optional(),
+  txHash: z.string().optional(),
+  blockNumber: z.number().optional(),
+});
+
+export type PaymentAuthorizedAck = z.infer<typeof PaymentAuthorizedAckSchema>;

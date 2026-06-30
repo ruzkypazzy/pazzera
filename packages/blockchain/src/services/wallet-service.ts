@@ -13,6 +13,7 @@ import { logger, getEnv, AppError, BlockchainError } from '@pazzera/core';
 import { getWalletProvider } from '../wallets/factory';
 import { signAuthorizationFor, transferFor } from '../wallets/local-dev-provider';
 import { usdcToBaseUnits, baseUnitsToUsdc } from '../adapters/usdc';
+import { getActiveProvider as getCircleProvider, CircleMockProvider } from '../circle/factory';
 import type { Address, Hex } from 'viem';
 
 export class WalletService {
@@ -36,20 +37,36 @@ export class WalletService {
       };
     }
 
-    const provider = getWalletProvider();
-    const result = await provider.createWallet({ userId });
+    const localProvider = getWalletProvider();
+    const localResult = await localProvider.createWallet({ userId });
+
+    // Phase 9 — also provision through the active Circle provider (real or
+    // mock). This is what gives us the canonical providerWalletId +
+    // providerMetadata for the admin dashboard + Circle webhooks.
+    const circle = getCircleProvider();
+    const circleResult = await circle.createWallet({
+      userId,
+      idempotencyKey: `pazzera:provision:${userId}`,
+    });
+
+    // Provider name resolution: prefer the legacy `provider.name` shape,
+    // except when running on the real UCW adapter.
+    const activeProviderName =
+      circle.name === 'circle-ucw'
+        ? 'circle-ucw'
+        : (localResult.providerWalletId.startsWith('local-') ? 'local-dev' : localProvider.name);
 
     const env = getEnv();
     const wallet = await prisma.wallet.create({
       data: {
         userId,
-        address: result.address,
-        encryptedPrivateKey: result.encryptedSecret ?? '',
+        address: circleResult.address ?? localResult.address,
+        encryptedPrivateKey: localResult.encryptedSecret ?? '',
         encryptionVersion: 2,
         keyVersion: 1,
-        provider: result.providerWalletId.startsWith('local-') ? 'local-dev' : provider.name,
-        providerWalletId: result.providerWalletId,
-        custody: result.custody,
+        provider: activeProviderName,
+        providerWalletId: circleResult.walletId, // canonical Circle id
+        custody: circleResult.custody,
         status: 'active',
         balanceUsdc: '0',
         pendingUsdc: '0',
@@ -76,15 +93,21 @@ export class WalletService {
     });
 
     logger.info(
-      { userId, walletId: wallet.id, address: result.address, provider: provider.name },
+      {
+        userId,
+        walletId: wallet.id,
+        address: circleResult.address ?? localResult.address,
+        provider: activeProviderName,
+        circleWalletId: circleResult.walletId,
+      },
       'wallet:provisioned',
     );
 
     return {
       walletId: wallet.id,
-      address: result.address,
-      provider: provider.name,
-      custody: result.custody,
+      address: circleResult.address ?? localResult.address,
+      provider: activeProviderName,
+      custody: circleResult.custody,
     };
   }
 
@@ -95,16 +118,35 @@ export class WalletService {
   static async refreshBalance(walletId: string): Promise<{ balanceUsdc: string; blockNumber: number }> {
     const wallet = await prisma.wallet.findUnique({ where: { id: walletId } });
     if (!wallet) throw new AppError('NOT_FOUND', 'Wallet not found', 404);
-    const provider = getWalletProvider();
-    const result = await provider.getBalance(wallet.address);
-    await prisma.wallet.update({
-      where: { id: walletId },
-      data: {
-        balanceUsdc: result.balanceUsdc,
-        lastIndexedBlock: BigInt(result.blockNumber),
-      },
-    });
-    return { balanceUsdc: result.balanceUsdc, blockNumber: result.blockNumber };
+    // Prefer the Circle adapter for balance reads — it returns a richer
+    // shape (blockNumber, chainId, formatting) and stays consistent with
+    // the same source that provisioned the wallet.
+    try {
+      const circle = getCircleProvider();
+      const cb = wallet.providerWalletId
+        ? await circle.fetchBalance(wallet.providerWalletId)
+        : await circle.fetchBalance(wallet.address);
+      await prisma.wallet.update({
+        where: { id: walletId },
+        data: {
+          balanceUsdc: cb.balanceUsdc,
+          lastIndexedBlock: BigInt(cb.blockNumber),
+        },
+      });
+      return { balanceUsdc: cb.balanceUsdc, blockNumber: cb.blockNumber };
+    } catch {
+      // Fallback to legacy read path (LocalDev RPC).
+      const provider = getWalletProvider();
+      const result = await provider.getBalance(wallet.address);
+      await prisma.wallet.update({
+        where: { id: walletId },
+        data: {
+          balanceUsdc: result.balanceUsdc,
+          lastIndexedBlock: BigInt(result.blockNumber),
+        },
+      });
+      return { balanceUsdc: result.balanceUsdc, blockNumber: result.blockNumber };
+    }
   }
 
   /**

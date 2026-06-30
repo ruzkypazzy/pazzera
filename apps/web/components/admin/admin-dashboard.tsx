@@ -24,6 +24,7 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
+import { SettlementTimeline } from '@/components/admin/settlement-timeline';
 
 interface AdminData {
   metrics: {
@@ -303,6 +304,9 @@ export function AdminDashboard() {
       {/* Phase 8 — Streaming health */}
       <StreamingHealthCard />
 
+      {/* Phase 9 — Payment health + settlement timeline */}
+      <PaymentsHealthCard />
+
       <Card icon={<Cpu className="h-4 w-4 text-accent" />} title="Queue & worker health">
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
           {data.queueStatus.map((q) => (
@@ -485,6 +489,85 @@ function AdminSkeleton() {
       </div>
       <Skeleton className="h-64" />
     </div>
+  );
+}
+
+// ─── Phase 9 — Payment Health ─────────────────────────────────
+
+interface PaymentsHealth {
+  paymentsPending: number;
+  paymentsConfirmed: number;
+  paymentsFailed: number;
+  avgSettlementLatencyMs: number;
+  webhookLagMs: number | null;
+  balanceDriftCount: number;
+  settlementFailureCount: number;
+  walletReconcile: {
+    lastRunAt: string | null;
+    walletsChecked: number;
+    driftDetected: number;
+    driftRepaired: number;
+  };
+  timestamp: string;
+}
+
+function PaymentsHealthCard() {
+  const [h, setH] = useState<PaymentsHealth | null>(null);
+  const [recent, setRecent] = useState<Array<{ id: string; amountUsdc: string; status: string; createdAt: string }>>([]);
+  useEffect(() => {
+    const fetchIt = () => Promise.all([
+      fetch('/api/admin/payments-health').then((r) => r.json()),
+      fetch('/api/admin/recent-payments').then((r) => r.json()).catch(() => ({ payments: [] })),
+    ]).then(([health, rec]) => {
+      setH(health as PaymentsHealth);
+      setRecent((rec as { payments: Array<{ id: string; amountUsdc: string; status: string; createdAt: string }> }).payments);
+    }).catch(() => undefined);
+    fetchIt();
+    const t = setInterval(fetchIt, 5_000);
+    return () => clearInterval(t);
+  }, []);
+  if (!h) {
+    return (
+      <Card icon={<DollarSign className="h-4 w-4 text-accent" />} title="Payment health (Phase 9)">
+        <Skeleton className="h-32 w-full" />
+      </Card>
+    );
+  }
+  return (
+    <Card icon={<DollarSign className="h-4 w-4 text-accent" />} title="Payment health (Phase 9)">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2">
+        <Stat label="Pending" value={String(h.paymentsPending)} />
+        <Stat label="Confirmed (24h)" value={String(h.paymentsConfirmed)} highlight />
+        <Stat label="Failed (24h)" value={String(h.paymentsFailed)} highlight={h.paymentsFailed > 0} />
+        <Stat label="Avg settlement" value={`${h.avgSettlementLatencyMs}ms`} />
+        <Stat label="Webhook lag" value={h.webhookLagMs == null ? '—' : `${Math.round(h.webhookLagMs / 1000)}s`} />
+        <Stat label="Balance drift (24h)" value={String(h.balanceDriftCount)} />
+        <Stat label="Settle failures (24h)" value={String(h.settlementFailureCount)} />
+      </div>
+      {recent.length > 0 && (
+        <div className="mt-4 space-y-2">
+          <div className="text-xs uppercase tracking-wide text-fg-muted">Recent settlements</div>
+          <div className="space-y-1.5 max-h-72 overflow-y-auto pr-2">
+            {recent.slice(0, 5).map((p) => (
+              <details key={p.id} className="rounded-xl border border-border bg-bg-elevated/40 p-2">
+                <summary className="flex cursor-pointer items-center justify-between text-xs">
+                  <span className="flex items-center gap-2">
+                    <Badge variant={p.status === 'settled' ? 'success' : p.status === 'failed' ? 'danger' : 'warning'}>
+                      {p.status}
+                    </Badge>
+                    <span className="tabular-nums">{p.amountUsdc} USDC</span>
+                  </span>
+                  <span className="text-fg-muted">{new Date(p.createdAt).toLocaleTimeString()}</span>
+                </summary>
+                <div className="mt-2">
+                  <SettlementTimeline paymentId={p.id} />
+                </div>
+              </details>
+            ))}
+          </div>
+        </div>
+      )}
+    </Card>
   );
 }
 

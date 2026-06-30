@@ -151,7 +151,7 @@ export async function runSplitWorker() {
             songId: payment.songId,
             amountUsdc: payment.amountUsdc,
             recipientCount: decision.splits.length,
-            txHash: 'pending-onchain-settlement', // real tx hash will be patched by Phase 9 facilitator callback
+            txHash: payment.txHash ?? 'unknown', // Phase 9 populates this from the FacilitatorService / Circle webhook
             payoutStatus: decision.payoutStatus,
           });
         } catch (err) {

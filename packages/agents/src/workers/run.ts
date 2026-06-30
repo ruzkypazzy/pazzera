@@ -13,6 +13,7 @@ import { runAnalyticsRollupWorker } from './analytics-rollup-worker';
 import { runWalletProvisionWorker } from './wallet-provision-worker';
 import { runAuthCleanupWorker } from './auth-cleanup-worker';
 import { runWalletIndexerWorker } from './wallet-indexer-worker';
+import { runWalletReconcileWorker } from './wallet-reconcile-worker';
 import { runAudioWorker } from './upload/audio-worker';
 import { runWaveformWorker } from './upload/waveform-worker';
 import { runPreviewWorker } from './upload/preview-worker';
@@ -28,6 +29,7 @@ async function main() {
   const analytics = await runAnalyticsRollupWorker();
   const walletProvision = await runWalletProvisionWorker();
   const walletIndexer = await runWalletIndexerWorker();
+  const walletReconcile = await runWalletReconcileWorker();
   const authCleanup = await runAuthCleanupWorker();
   const uploadAudio = await runAudioWorker();
   const uploadWaveform = await runWaveformWorker();
@@ -54,6 +56,9 @@ async function main() {
   // Phase 7 — recurring AI agent jobs
   const fraudQ = getQueue(QUEUE_NAMES.agentFraud);
   await fraudQ.add('fraud.scan', { detector: 'all' }, { repeat: { every: 5 * 60 * 1000 } });
+  // Phase 9 — wallet reconcile (drift detection)
+  const reconcileQ = getQueue(QUEUE_NAMES.walletReconcile);
+  await reconcileQ.add('wallet.reconcile', { task: 'reconcile' }, { repeat: { every: 5 * 60 * 1000 } });
   const analyticsQ = getQueue(QUEUE_NAMES.analyticsRollup);
   await analyticsQ.add('analytics.5min', { task: 'rollup', window: '5min' }, { repeat: { every: 5 * 60 * 1000 } });
   await analyticsQ.add('analytics.hour', { task: 'rollup', window: 'hour' }, { repeat: { pattern: '7 * * * *' } });
@@ -70,6 +75,7 @@ async function main() {
       analytics.close(),
       walletProvision.close(),
       walletIndexer.close(),
+      walletReconcile.close(),
       authCleanup.close(),
       uploadAudio.close(),
       uploadWaveform.close(),
