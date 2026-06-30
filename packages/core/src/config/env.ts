@@ -97,6 +97,16 @@ const schema = z.object({
   SPLIT_DEFAULT_FEATURED_PCT: numericString('20'),
   SPLIT_DEFAULT_PRODUCER_PCT: numericString('10'),
 
+  // Wallet (Phase 4)
+  PAZZERA_WALLET_PROVIDER: z.enum(['local-dev', 'circle-ucw', 'arc-native']).default('local-dev'),
+  WALLET_DAILY_WITHDRAW_CAP_USDC: numericString('1000'),
+  WALLET_WITHDRAW_COOLDOWN_SECONDS: numericString('60'),
+  WALLET_RECOVERY_COOLDOWN_HOURS: numericString('24'),
+  WALLET_X402_DAILY_CAP_USDC: numericString('5'),
+  WALLET_X402_PER_STREAM_CAP_USDC: numericString('0.01'),
+  INDEXER_BATCH_SIZE: numericString('500'),
+  INDEXER_INTERVAL_SECONDS: numericString('15'),
+
   // Admin
   ADMIN_EMAILS: csv,
 

@@ -120,23 +120,47 @@ model Wallet {
   userId               String    @unique
   user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   address              String    @unique
-  encryptedPrivateKey  String    // AES-256-GCM blob JSON (phase 4)
+
+  // ─── Encryption v2 (versioned, rotation-ready) ───
+  // Plaintext private key is NEVER stored. The blob is the v2 PHC format
+  // (see packages/blockchain/src/wallets/encryption.ts).
+  encryptedPrivateKey  String
+  encryptionVersion    Int       @default(2)
+  keyVersion           Int       @default(1)
+  encryptionSalt       String?   // optional per-user salt (Phase 4 uses HKDF salts)
+  // Provider metadata
+  provider             String    @default("local-dev") // see WalletProvider.name
+  providerWalletId     String?   // provider's internal ID (Circle walletId etc.)
+  custody              String    @default("user")      // 'user' (UCW) | 'platform' (LocalDev demo)
+
   status               String    @default("pending_provisioning") // see WalletStatus
   balanceUsdc          String    @default("0")  // cached
   pendingUsdc          String    @default("0")  // in-flight payouts
+  // Indexer
+  lastIndexedBlock     BigInt?
+  indexerCursor        Json?     // { lastBlock, lastAt, gapRanges: [{from,to}] }
+  // Lifecycle
   frozenAt             DateTime?
   frozenReason         String?
   compromisedAt        DateTime?
   recoveryRequestedAt  DateTime?
-  lastIndexedBlock     BigInt?
+  // x402 spend caps (Option B delegated auth)
+  x402DailyCapUsdc     String?   // max nano-payment authorization per day
+  x402PerStreamCapUsdc String?   // max per single stream authorization
+  x402AuthorizedAt     DateTime? // last time the user granted an x402 scope
+
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
   debitEntries         LedgerEntry[] @relation("LedgerDebitWallet")
   creditEntries        LedgerEntry[] @relation("LedgerCreditWallet")
+  transactions         WalletTransaction[]
+  recovery             WalletRecovery?
+  analytics            WalletAnalytics?
 
   @@index([address])
   @@index([status])
+  @@index([provider])
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -351,6 +375,91 @@ model FraudEvent {
 
   @@index([userId, createdAt(sort: Desc)])
   @@index([type, createdAt(sort: Desc)])
+}
+
+// ════════════════════════════════════════════════════════════════════
+// WALLET TRANSACTION LOG + RECOVERY + ANALYTICS
+// ════════════════════════════════════════════════════════════════════
+
+// Unified on-chain + off-chain wallet transaction log.
+//   Type:    deposit | withdraw | stream_payment | royalty_payout | refund | adjustment | x402_settlement
+//   Status:  pending → signed → submitted → confirmed
+//                     └──── failed ←──┘
+//                              └→ reversed
+model WalletTransaction {
+  id                  String   @id @default(cuid())
+  walletId            String
+  wallet              Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  type                String
+  direction           String   // 'debit' | 'credit'
+  amountUsdc          String
+  amountBaseUnits     String
+  status              String   @default("pending")
+  txHash              String?
+  blockNumber         BigInt?
+  counterpartyAddress String?
+  memo                String?
+  meta                Json?
+  // Lifecycle timestamps
+  signedAt            DateTime?
+  submittedAt         DateTime?
+  confirmedAt         DateTime?
+  failedAt            DateTime?
+  failureReason       String?
+  reversedAt          DateTime?
+  // Cross-links
+  streamId            String?
+  paymentId           String?
+  payoutId            String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([walletId, createdAt(sort: Desc)])
+  @@index([status])
+  @@index([txHash])
+  @@index([type, createdAt(sort: Desc)])
+}
+
+// Wallet recovery flow
+model WalletRecovery {
+  id                 String   @id @default(cuid())
+  walletId           String   @unique
+  wallet             Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  userId             String
+  state              String   @default("recovery_requested") // recovery_requested | recovery_verified | recovery_completed
+  reason             String?  // lost_key | compromised | device_lost
+  challenge          String?  // short-lived token sent via email
+  challengeExpiresAt DateTime?
+  attempts           Int      @default(0)
+  newEncryptedSecret String?  // populated on completion
+  completedAt        DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([userId, state])
+  @@index([challengeExpiresAt])
+}
+
+// Per-wallet analytics — populated by the indexer and payment workers.
+model WalletAnalytics {
+  id                          String   @id @default(cuid())
+  walletId                    String   @unique
+  wallet                      Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  totalDepositsBaseUnits      String   @default("0")
+  totalSpendBaseUnits         String   @default("0")
+  totalEarningsBaseUnits      String   @default("0")
+  streamCount                 Int      @default(0)
+  avgSpendPerStreamBaseUnits  String   @default("0")
+
+  // 0–100; 100 = healthy. Computed from activity + caps + freshness.
+  healthScore                 Int      @default(100)
+  lastIndexedAt               DateTime?
+  lastDepositAt               DateTime?
+  lastSpendAt                 DateTime?
+  lastEarningAt               DateTime?
+
+  updatedAt                   DateTime @updatedAt
 }
 
 // ════════════════════════════════════════════════════════════════════
