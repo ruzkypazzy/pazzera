@@ -11,10 +11,12 @@ export const QUEUE_NAMES = {
   agentCurator: 'agent:curator',
   agentFan: 'agent:fan',
   agentSplit: 'agent:split',
+  agentDiscovery: 'agent:discovery',
   paymentSettle: 'payment:settle',
   streamMonitor: 'stream:monitor',
   walletIndexer: 'wallet:indexer',
   maintenance: 'maintenance',
+  analyticsRollup: 'analytics:rollup',
 } as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
@@ -31,6 +33,13 @@ export interface FanJobPayload {
 
 export interface SplitJobPayload {
   paymentId: string;
+}
+
+export interface DiscoveryJobPayload {
+  /** Trigger type */
+  type: 'rebuild_for_user' | 'rebuild_global' | 'on_stream_complete' | 'on_song_publish';
+  userId?: string;
+  songId?: string;
 }
 
 export interface PaymentSettleJobPayload {
@@ -109,6 +118,8 @@ export const enqueue = {
     }),
   split: (payload: SplitJobPayload, opts?: JobsOptions) =>
     getQueue(QUEUE_NAMES.agentSplit).add('split.distribute', payload, opts),
+  discovery: (payload: DiscoveryJobPayload, opts?: JobsOptions) =>
+    getQueue(QUEUE_NAMES.agentDiscovery).add('discovery.rebuild', payload, opts),
   paymentSettle: (payload: PaymentSettleJobPayload, opts?: JobsOptions) =>
     getQueue(QUEUE_NAMES.paymentSettle).add('payment.settle', payload, {
       ...HIGH_PRIORITY,
@@ -123,6 +134,8 @@ export const enqueue = {
     getQueue(QUEUE_NAMES.walletIndexer).add('wallet.index', payload, opts),
   maintenance: (payload: MaintenanceJobPayload, opts?: JobsOptions) =>
     getQueue(QUEUE_NAMES.maintenance).add(payload.task, payload, opts),
+  analyticsRollup: (payload: MaintenanceJobPayload, opts?: JobsOptions) =>
+    getQueue(QUEUE_NAMES.analyticsRollup).add(payload.task, payload, opts),
 };
 
 export function getAllQueues(): Queue[] {

@@ -7,17 +7,24 @@ import { logger } from '@pazzera/core';
 import { runCuratorWorker } from './curator-worker';
 import { runFanWorker } from './fan-worker';
 import { runSplitWorker } from './split-worker';
+import { runDiscoveryWorker } from './discovery-worker';
 
 async function main() {
   logger.info('workers:starting');
   const curator = await runCuratorWorker();
   const fan = await runFanWorker();
   const split = await runSplitWorker();
+  const discovery = await runDiscoveryWorker();
   logger.info('workers:ready');
 
   const shutdown = async (sig: string) => {
     logger.info({ sig }, 'workers:shutting_down');
-    await Promise.all([curator.close(), fan.close(), split.close()]);
+    await Promise.all([
+      curator.close(),
+      fan.close(),
+      split.close(),
+      discovery.close(),
+    ]);
     process.exit(0);
   };
   process.on('SIGINT', () => void shutdown('SIGINT'));

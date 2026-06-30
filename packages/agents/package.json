@@ -11,7 +11,8 @@
   },
   "scripts": {
     "start": "tsx src/workers/run.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@pazzera/blockchain": "workspace:*",
@@ -22,6 +23,7 @@
   },
   "devDependencies": {
     "tsx": "^4.15.0",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
   }
 }

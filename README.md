@@ -78,12 +78,12 @@ See [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md) — covers Docker, Nginx, Let's
 | # | Phase | Status |
 |---|---|---|
 | 1 | Architecture & scaffolding | ✅ done |
-| 2 | Database schema + migrations | ⏳ |
+| 2 | Database schema + migrations + repos + seed | ✅ done |
 | 3 | Auth (Resend OTP, sessions) | ⏳ |
 | 4 | Wallet creation + encryption | ⏳ |
 | 5 | Frontend UI | ⏳ |
 | 6 | Upload pipeline (R2, metadata) | ⏳ |
-| 7 | AI agents (Curator / Fan / Split) | ⏳ |
+| 7 | AI agents (Curator / Fan / Split / Discovery) | ⏳ |
 | 8 | Streaming engine (Socket.IO) | ⏳ |
 | 9 | Nano payment (Arc + x402 + Circle) | ⏳ |
 | 10 | Tests (Vitest + Playwright) | ⏳ |
