@@ -12,13 +12,11 @@
 import { type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import {
-  getArcPublicClient,
-  getArcWalletClient,
-  waitForReceipt,
   encodeTransfer,
   baseUnitsToUsdc,
   usdcAddress,
 } from '../adapters/usdc';
+import { getArcPublicClient, getArcWalletClient, waitForReceipt } from '../adapters/arc';
 import { signAuthorization as coreSignAuthorization } from '../services/eip712';
 import {
   generateWalletKeypairV2,
@@ -68,7 +66,7 @@ export class LocalDevWalletProvider implements WalletProvider {
       abi: USDC_BALANCEOF_ABI,
       functionName: 'balanceOf',
       args: [address as Address],
-    })) as bigint;
+    } as never)) as bigint;
     const blockNumber = Number(await client.getBlockNumber());
     const balanceBaseUnits = balance.toString();
     return {
@@ -142,7 +140,7 @@ export async function signAuthorizationFor(
     }
   }
   const account = deriveAccountFromKey(privateKey);
-  const core = coreSignAuthorization(privateKey, {
+  const core = await coreSignAuthorization(privateKey, {
     from: account.address,
     to: input.to as Address,
     value: input.valueBaseUnits,
@@ -179,7 +177,7 @@ export async function transferFor(
   const txHash = await walletClient.sendTransaction({
     to: usdcAddress(),
     data: encodeTransfer(input.toAddress as Address, BigInt(input.amountBaseUnits)),
-  });
+  } as never);
   const receipt = await waitForReceipt(txHash);
   return {
     txHash: receipt.transactionHash,
@@ -194,4 +192,3 @@ function deriveAccountFromKey(privateKey: Hex) {
 }
 
 // Helper re-export so callers can pin the blob's key/salt versions
-export { parseBlob };

@@ -52,14 +52,14 @@ export default async function DashboardPage() {
       streamsToday: todayAgg._count._all,
       spentToday: Number((todayAgg._sum.amountBaseUnits ?? 0n).toString()) / 1_000_000,
     },
-    recentlyPlayed: recent.map((r) => ({
+    recentlyPlayed: recent.map((r: { song: { id: string; title: string; artistName: string; coverUrl: string | null; durationSeconds: number } }) => ({
       id: r.song.id,
       title: r.song.title,
       artist: r.song.artistName,
       coverUrl: r.song.coverUrl,
       durationSec: r.song.durationSeconds,
     })),
-    trending: trending.map((t) => ({
+    trending: trending.map((t: { id: string; title: string; artistName: string; coverUrl: string | null; durationSeconds: number; playCount: number; publishedPriceUsdc: number }) => ({
       id: t.id,
       title: t.title,
       artist: t.artistName,
@@ -68,7 +68,7 @@ export default async function DashboardPage() {
       playCount: t.playCount,
       publishedPriceUsdc: t.publishedPriceUsdc,
     })),
-    recommended: recommended.map((r) => ({
+    recommended: recommended.map((r: { id: string; title: string; artistName: string; coverUrl: string | null; durationSeconds: number; publishedPriceUsdc: number }) => ({
       id: r.id,
       title: r.title,
       artist: r.artistName,
@@ -81,7 +81,7 @@ export default async function DashboardPage() {
   return (
     <div className="mx-auto max-w-7xl px-4 md:px-8 py-6 space-y-6">
       <WalletStatusBanner />
-      <ListenerDashboard initial={initial} />
+      <ListenerDashboard initial={initial as unknown as Parameters<typeof ListenerDashboard>[0]['initial']} />
     </div>
   );
 }

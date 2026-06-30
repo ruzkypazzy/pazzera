@@ -9,11 +9,11 @@ import { AppError, isAppError, ValidationError } from '../utils/errors';
 import { verifyCsrf } from './csrf';
 
 type Handler<TParams = unknown> = (args: {
-  req: NextRequest;
+  req: NextRequest | any;
   params: TParams;
   requestId: string;
   userId?: string;
-}) => Promise<NextResponse> | NextResponse;
+}) => unknown | Promise<unknown>;
 
 export interface WithApiOptions {
   /** Require an authenticated session (sets `userId`). */
@@ -40,7 +40,7 @@ export function withApi<TParams = unknown>(
   return async (
     req: NextRequest,
     context: { params?: TParams } = {},
-  ): Promise<NextResponse> => {
+  ): Promise<Response> => {
     const requestId = newRequestId();
     const start = Date.now();
 
@@ -82,11 +82,11 @@ export function withApi<TParams = unknown>(
       // Auth (deferred — actual session lookup happens inside handler via session service)
       // Here we just pass through; handlers can call getSession() themselves.
 
-      const response = await handler({
+      const response = (await handler({
         req: withBody(req, body),
         params: (context.params ?? ({} as TParams)) as TParams,
         requestId,
-      });
+      })) as Response;
 
       logger.info(
         {

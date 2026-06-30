@@ -87,16 +87,20 @@ export const POST = withApi(
       }
     }
 
-    const internalUsernames = body.recipients.filter((r) => r.type === 'internal').map((r) => r.username);
-    const users = internalUsernames.length
+    const internalUsernames: string[] = [];
+    for (const r of body.recipients as { type: string; username: string }[]) {
+      if (r.type === 'internal') internalUsernames.push(r.username);
+    }
+    const users: { id: string; username: string }[] = internalUsernames.length
       ? await prisma.user.findMany({ where: { username: { in: internalUsernames } }, select: { id: true, username: true } })
       : [];
-    const userByUsername = new Map(users.map((u) => [u.username, u]));
+    const userByUsername = new Map<string, { id: string; username: string }>();
+    for (const u of users) userByUsername.set(u.username, u);
 
     await prisma.$transaction([
       prisma.royaltyRecipient.deleteMany({ where: { songId: song.id } }),
       prisma.royaltyRecipient.createMany({
-        data: body.recipients.map((r, i) => {
+        data: body.recipients.map((r: { username: string; type: 'internal' | 'external'; role: 'producer' | 'custom' | 'primary_artist' | 'featured_artist' | 'songwriter' | 'label'; percentageBps: number; externalWalletAddress?: string; externalLabel?: string }, i: number) => {
           if (r.type === 'internal') {
             const u = userByUsername.get(r.username);
             if (!u) throw new ValidationError(`Unknown Pazzera user: @${r.username}`);

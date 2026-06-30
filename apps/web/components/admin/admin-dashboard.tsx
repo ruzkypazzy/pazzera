@@ -414,11 +414,11 @@ function ExplainModal({ decision, onClose }: { decision: DecisionDetail; onClose
   );
 }
 
-function badgeVariantForDecision(decision: string): 'success' | 'danger' | 'warning' | 'info' | 'accent' {
+function badgeVariantForDecision(decision: string): 'success' | 'danger' | 'warning' | 'default' | 'accent' {
   if (['approved', 'completed', 'valid_stream', 'for_you', 'resolved'].includes(decision)) return 'success';
   if (['rejected', 'failed', 'fraudulent_stream'].includes(decision)) return 'danger';
   if (['needs_changes', 'manual_review', 'suspicious_stream'].includes(decision)) return 'warning';
-  return 'info';
+  return 'default';
 }
 
 function Kpi({ label, value, icon, highlight }: { label: string; value: string; icon: React.ReactNode; highlight?: boolean }) {
@@ -471,7 +471,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
   return (
     <div className="rounded-xl bg-bg-muted px-3 py-2 text-center">
       <div className="text-[10px] uppercase tracking-wide text-fg-muted">{label}</div>

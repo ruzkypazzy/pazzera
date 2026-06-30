@@ -193,12 +193,12 @@ async function runSybilDetector(): Promise<number> {
   }
   let alerts = 0;
   for (const [ip, list] of byIp) {
-    const users = new Set(list.map((s) => s.userId));
+    const users = new Set<string>(list.map((s: { userId: string }) => s.userId));
     if (users.size < 5) continue;
     // Compute timing stddev of stream starts (in seconds)
-    const t = list.map((s) => s.startedAt.getTime() / 1000).sort((a, b) => a - b);
-    const mean = t.reduce((s, n) => s + n, 0) / t.length;
-    const variance = t.reduce((s, n) => s + (n - mean) ** 2, 0) / t.length;
+    const t = list.map((s: { startedAt: Date }) => s.startedAt.getTime() / 1000).sort((a, b) => a - b);
+    const mean = t.reduce((s: number, n: number) => s + n, 0) / t.length;
+    const variance = t.reduce((s: number, n: number) => s + (n - mean) ** 2, 0) / t.length;
     const stddev = Math.sqrt(variance);
     const sameTarget = (() => {
       const songCounts = new Map<string, number>();
@@ -210,7 +210,7 @@ async function runSybilDetector(): Promise<number> {
     })();
     const windowHours = users.size === 0 ? 0 : 24;
     const input: SybilSignals = {
-      userIds: [...users],
+      userIds: [...users] as string[],
       ipCluster: ip,
       createdAtWindowHours: windowHours,
       identicalStreamTargetSongId: sameTarget,

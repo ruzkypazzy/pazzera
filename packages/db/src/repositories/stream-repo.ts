@@ -6,7 +6,7 @@ import { prisma } from '../client';
 export const StreamRepo = {
   async startStream(data: { userId: string; songId: string; ipAddress?: string; userAgent?: string; deviceFingerprintId?: string }) {
     // Enforce 1 active stream per user
-    return prisma.$transaction(async (tx) => {
+    return prisma.$transaction(async (tx: import('@prisma/client').Prisma.TransactionClient) => {
       const existing = await tx.stream.findFirst({
         where: { userId: data.userId, endedAt: null },
         orderBy: { startedAt: 'desc' },

@@ -27,7 +27,7 @@ export const POST = withApi(
 
     const v = validateImage(body.filename, body.mime, body.size);
     if (!v.ok) {
-      throw new AppError('VALIDATION_ERROR', v.reason, 400);
+      throw new AppError('VALIDATION_ERROR', (v as { reason: string }).reason, 400);
     }
 
     const song = await prisma.song.findUnique({

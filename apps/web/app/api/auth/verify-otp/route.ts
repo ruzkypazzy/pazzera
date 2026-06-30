@@ -43,9 +43,10 @@ export const POST = withApi(
 
     const result = await verifyOtp({ email, code, purpose: purpose ?? 'sign_in', ipHash, userAgent });
     if (!result.ok) {
+      const failure = result as Extract<typeof result, { ok: false }>;
       throw new AuthError(
-        result.code === 'too_many_attempts' ? 'AUTH_RATE_LIMITED' : 'AUTH_INVALID',
-        result.message,
+        failure.code === 'too_many_attempts' ? 'AUTH_RATE_LIMITED' : 'AUTH_INVALID',
+        failure.message,
       );
     }
 

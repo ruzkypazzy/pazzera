@@ -37,7 +37,7 @@ export interface SplitInput {
     payoutId?: string;                // set when the worker is reconciling
     txHash?: string | null;
     failureReason?: string | null;
-    status?: 'pending' | 'processing' | 'completed' | 'failed';
+    status?: 'pending' | 'processing' | 'completed' | 'failed' | 'partial_failure' | string;
   }>;
 }
 
@@ -45,7 +45,8 @@ const USDC_PRECISION = 6;
 const BPS_TOTAL = 10_000;
 
 /** Scale to base units (6 decimals) and avoid float drift entirely. */
-function usdcToBaseUnits(amount: string): bigint {
+function usdcToBaseUnits(amount: string | undefined | null): bigint {
+  if (amount == null) return 0n;
   if (amount.includes('.')) {
     const [whole, frac = ''] = amount.split('.');
     const padded = (frac + '0'.repeat(USDC_PRECISION)).slice(0, USDC_PRECISION);
@@ -100,9 +101,10 @@ export function decideSplit(input: SplitInput): SplitDecision {
   const splits = allocations.map((a, i) => {
     let units = a.units;
     if (i === dustRecipientIdx) units += dustUnits;
-    const status =
-      a.r.status === 'completed' || a.r.status === 'failed' || a.r.status === 'processing'
-        ? a.r.status
+    const rawStatus = (a.r.status ?? 'pending') as 'pending' | 'processing' | 'completed' | 'failed' | 'partial_failure';
+    const status: 'pending' | 'processing' | 'completed' | 'failed' | 'partial_failure' =
+      ['completed', 'failed', 'processing', 'partial_failure'].includes(rawStatus)
+        ? rawStatus
         : 'pending';
     return {
       username: a.r.username,

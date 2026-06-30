@@ -24,6 +24,8 @@
     "@pazzera/storage": "workspace:*",
     "@pazzera/upload": "workspace:*",
     "@prisma/client": "^5.15.0",
+    "bullmq": "^5.4.0",
+    "ioredis": "^5.4.0",
     "@radix-ui/react-avatar": "^1.0.4",
     "@radix-ui/react-dialog": "^1.0.5",
     "@radix-ui/react-dropdown-menu": "^2.0.6",

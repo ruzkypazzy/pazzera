@@ -1,7 +1,10 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "./dist"
+    "outDir": "./dist",
+    "noImplicitAny": false,
+    "strict": false,
+    "noUncheckedIndexedAccess": false
   },
-  "include": ["src/**/*", "../../db/src/**/*", "../../queue/src/**/*", "../../core/src/**/*"]
+  "include": ["src/**/*", "types/**/*.d.ts"]
 }

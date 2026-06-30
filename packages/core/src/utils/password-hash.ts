@@ -32,8 +32,14 @@ export async function hashOtp(plaintext: string): Promise<string> {
   });
 }
 
-/** Constant-time verify of a plaintext secret against a PHC-encoded hash. */
-export async function verifyOtp(plaintext: string, encoded: string): Promise<boolean> {
+/**
+ * Constant-time verify of a plaintext secret against a PHC-encoded hash.
+ *
+ * Implementation-level name — the user-facing flow is `verifyOtp` in
+ * `./services/otp-service.ts`, which handles lookup + replay protection
+ * before calling this primitive.
+ */
+export async function verifyOtpHash(plaintext: string, encoded: string): Promise<boolean> {
   try {
     return await argon2Verify({ password: plaintext, hash: encoded });
   } catch {

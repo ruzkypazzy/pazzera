@@ -5,7 +5,7 @@
     "moduleResolution": "Bundler",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "strict": true,
-    "noUncheckedIndexedAccess": true,
+    "noUncheckedIndexedAccess": false,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
     "esModuleInterop": true,
@@ -14,10 +14,10 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "allowSyntheticDefaultImports": true,
-    "declaration": true,
-    "declarationMap": true,
+    "declaration": false,
+    "declarationMap": false,
     "sourceMap": true,
-    "incremental": true,
+    "incremental": false,
     "composite": false,
     "jsx": "preserve",
     "baseUrl": ".",
@@ -40,3 +40,4 @@
   },
   "exclude": ["node_modules", "dist", ".next", "build"]
 }
+

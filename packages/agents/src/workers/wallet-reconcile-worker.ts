@@ -18,15 +18,10 @@ import { getQueueConnection, QUEUE_NAMES, enqueue } from '@pazzera/queue';
 import { prisma } from '@pazzera/db';
 import { logger } from '@pazzera/core';
 import { getActiveProvider } from '@pazzera/blockchain';
+import { driftCounters } from '../utils/drift-counters';
 
-// Drift counts (in-memory) — exported for the /api/admin/payments-health
-// endpoint to merge with the Postgres-side counters.
-export const driftCounters = {
-  lastRunAt: 0,
-  driftDetected: 0,
-  driftRepaired: 0,
-  walletsChecked: 0,
-};
+// Drift counts live in a shared utils module so web/app can read them
+// without importing the entire worker (and its Prisma + BullMQ deps).
 
 const DRIFT_THRESHOLD_USDC = '0.0001';
 

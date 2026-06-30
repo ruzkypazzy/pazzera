@@ -22,7 +22,7 @@ async function requireAdmin() {
   if (!isAdmin) throw new AppError('FORBIDDEN', 'Admin access required', 403);
 }
 
-export const GET = withApi(async (req: Request) => {
+export const GET = withApi(async (req: any) => {
   await requireAdmin();
   const id = (req as unknown as { params?: { id?: string } }).params?.id
     ?? new URL(req.url).pathname.split('/').filter((s) => s).pop();

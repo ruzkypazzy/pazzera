@@ -39,7 +39,7 @@ export const GET = withApi(async () => {
         names.map(async (name) => {
           const q = new Queue(name, { connection: conn });
           try {
-            const counts = await q.getJobCounts('waiting', 'active', 'failed');
+            const counts = (await q.getJobCounts('waiting', 'active', 'failed')) as { waiting: number; active: number; failed: number };
             await q.close().catch(() => undefined);
             return [name, counts] as const;
           } catch {
@@ -67,7 +67,7 @@ export const GET = withApi(async () => {
         queueDepth: r.queueDepth,
         lastExecutionAt: r.lastExecutionAt?.toISOString() ?? null,
       })),
-      queueDepth: queueDepth as Record<string, Prisma.JsonValue>,
+      queueDepth: queueDepth as Record<string, unknown>,
     }),
     { status: 200, headers: { 'content-type': 'application/json' } },
   );

@@ -39,7 +39,7 @@ export function middleware(req: NextRequest) {
     const url = req.nextUrl.clone();
     url.pathname = '/sign-in';
     url.searchParams.set('next', pathname);
-    return NextResponse.redirect(url);
+    return NextResponse.redirect(url as never);
   }
   return NextResponse.next();
 }

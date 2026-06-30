@@ -77,7 +77,7 @@ export const GET = withApi(async () => {
         const q = new Queue(name, { connection: conn });
         const counts = await q.getJobCounts('waiting', 'active', 'failed', 'delayed');
         await q.close().catch(() => undefined);
-        return { name, ...counts };
+        return { name, ...(counts as { waiting: number; active: number; failed: number; delayed: number }) };
       }),
     );
   } catch {

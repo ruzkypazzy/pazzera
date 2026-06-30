@@ -45,12 +45,17 @@ export async function runSplitWorker() {
           const input: SplitInput = {
             paymentId,
             grossAmountUsdc: payment.amountUsdc,
-            recipients: payment.song.recipients.map((r) => ({
+            recipients: payment.song.recipients.map((r: {
+              username: string;
+              role: string;
+              splitPercentageBps: number;
+              payoutPriority: number;
+            }) => ({
               username: r.username,
               role: r.role,
               splitPercentageBps: r.splitPercentageBps,
               payoutPriority: r.payoutPriority,
-              payoutId: payment.payouts.find((p) => p.recipientUsername === r.username)?.id,
+              payoutId: payment.payouts.find((p: { recipientUsername: string }) => p.recipientUsername === r.username)?.id,
               status: (payment.payouts.find((p) => p.recipientUsername === r.username)?.status as
                 | 'pending' | 'processing' | 'completed' | 'failed' | undefined) ?? 'pending',
             })),
@@ -75,7 +80,12 @@ export async function runSplitWorker() {
         const input: SplitInput = {
           paymentId,
           grossAmountUsdc: payment.amountUsdc,
-          recipients: payment.song.recipients.map((r) => ({
+          recipients: payment.song.recipients.map((r: {
+            username: string;
+            role: string;
+            splitPercentageBps: number;
+            payoutPriority: number;
+          }) => ({
             username: r.username,
             role: r.role,
             splitPercentageBps: r.splitPercentageBps,
@@ -90,7 +100,7 @@ export async function runSplitWorker() {
         // Materialize Payout rows + ledger entries
         await prisma.$transaction(async (tx) => {
           for (const split of decision.splits) {
-            const recipient = payment.song.recipients.find((r) => r.username === split.username);
+            const recipient = payment.song.recipients.find((r: { username: string }) => r.username === split.username);
             if (!recipient) continue;
             const payout = await tx.payout.create({
               data: {

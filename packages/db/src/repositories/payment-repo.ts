@@ -67,7 +67,7 @@ export const PaymentRepo = {
     });
   },
   async decideManualReview(reviewId: string, deciderId: string, decision: 'approved' | 'rejected' | 'refunded', reason: string) {
-    return prisma.$transaction(async (tx) => {
+    return prisma.$transaction(async (tx: import('@prisma/client').Prisma.TransactionClient) => {
       const review = await tx.manualReview.update({
         where: { id: reviewId },
         data: {

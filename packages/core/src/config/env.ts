@@ -82,12 +82,17 @@ const schema = z.object({
 
   // Circle Gateway / x402
   CIRCLE_API_KEY: z.string().min(1),
-  CIRCLE_APP_ID: z.string().min(1),
-  CIRCLE_GATEWAY_FACILITATOR_URL: z.string().url(),
+  CIRCLE_APP_ID: z.string().optional(),
+  CIRCLE_BASE_URL: z.string().default('https://api.circle.com'),
+  CIRCLE_ENTITY_SECRET: z.string().optional(),
+  CIRCLE_GATEWAY_FACILITATOR_URL: z.string().default('https://gateway-api-testnet.circle.com'),
+  CIRCLE_WALLET_SET_ID: z.string().optional(),
+  CIRCLE_WEBHOOK_SECRET: z.string().optional(),
   X402_NETWORK_ID: z.string().default('eip155:5042002'),
   GATEWAY_WALLET_ADDRESS: z
     .string()
-    .regex(/^0x[a-fA-F0-9]{40}$/),
+    .regex(/^0x[a-fA-F0-9]{40}$/)
+    .optional(),
 
   // Agents
   CURATOR_PRICE_MIN_USDC: numericString('0.001'),
@@ -112,16 +117,6 @@ const schema = z.object({
 
   // Observability (optional)
   SENTRY_DSN: z.string().optional(),
-
-  // Phase 9 — Circle UCW + x402 settlement
-  CIRCLE_API_KEY: z.string().optional(),
-  CIRCLE_ENTITY_SECRET: z.string().optional(),
-  CIRCLE_APP_ID: z.string().optional(),
-  CIRCLE_BASE_URL: z.string().default('https://api.circle.com'),
-  CIRCLE_WALLET_SET_ID: z.string().optional(),
-  GATEWAY_FACILITATOR_URL: z.string().default('https://gateway-api-testnet.circle.com'),
-  // Webhook signing secret (HMAC-SHA256 over the raw body)
-  CIRCLE_WEBHOOK_SECRET: z.string().optional(),
 
   // Demo mode (Phase 5) — hackathon-friendly preloaded data
   DEMO_MODE: z

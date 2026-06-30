@@ -15,7 +15,7 @@
  */
 import { prisma } from '@pazzera/db';
 import { logger, getEnv, RateLimitError, ValidationError } from '../index';
-import { hashOtp, verifyOtp } from '../utils/password-hash';
+import { hashOtp, verifyOtpHash } from '../utils/password-hash';
 import { recordAuthEvent } from './auth-events';
 
 const MAX_OTP_ATTEMPTS = 5;
@@ -169,7 +169,7 @@ export async function verifyOtp(
   }
 
   // Verify (Argon2id constant-time)
-  const matches = await verifyOtp(code, otp.codeHash);
+  const matches = await verifyOtpHash(code, otp.codeHash);
 
   if (!matches) {
     // Increment attempts atomically

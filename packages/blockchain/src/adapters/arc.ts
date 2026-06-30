@@ -26,7 +26,6 @@ function getChain(): Chain {
   chain = {
     id: env.ARC_CHAIN_ID,
     name: 'Arc Testnet',
-    network: 'arc-testnet',
     nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 18 },
     rpcUrls: {
       default: { http: [env.ARC_RPC_URL] },
@@ -36,17 +35,17 @@ function getChain(): Chain {
       default: { name: 'ArcScan', url: env.ARC_EXPLORER_URL },
     },
     testnet: true,
-  };
+  } as Chain;
   return chain;
 }
 
 export function getArcPublicClient(): PublicClient {
-  if (publicClient) return publicClient;
+  if (publicClient) return publicClient as PublicClient;
   const env = getEnv();
   publicClient = createPublicClient({
-    chain: getChain(),
+    chain: getChain() as Chain,
     transport: http(env.ARC_RPC_URL, { retryCount: 3, retryDelay: 500 }),
-  });
+  }) as PublicClient;
   return publicClient;
 }
 

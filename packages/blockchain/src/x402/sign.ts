@@ -13,8 +13,6 @@
  */
 import { type Address, type Hex } from 'viem';
 import { privateKeyToAccount, type PrivateKeyAccount } from 'viem/accounts';
-import { signTypedData } from 'viem/actions';
-import { getArcWalletClient } from '../adapters/arc';
 import {
   getEip712Domain,
   EIP712_TYPES,
@@ -68,13 +66,12 @@ export async function signWithPrivateKey(
  * when the dev environment doesn't want to plumb a raw key.
  */
 export async function signWithArcClient(auth: TransferWithAuthorization, privateKey: Hex): Promise<SignResult> {
-  const client = getArcWalletClient(privateKey);
-  if (!client.account) throw new Error('ArcWalletClient has no account');
-  const from = client.account.address;
+  const account = privateKeyToAccount(privateKey);
+  const from = account.address;
   if (from.toLowerCase() !== auth.from.toLowerCase()) {
     throw new Error(`Client account ${from} ≠ authorization from ${auth.from}`);
   }
-  const signature = await signTypedData(client, {
+  const signature = await account.signTypedData({
     domain: getEip712Domain(),
     types: EIP712_TYPES,
     primaryType: 'TransferWithAuthorization',

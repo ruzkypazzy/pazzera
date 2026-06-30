@@ -85,7 +85,7 @@ export const RoyaltyRepo = {
   },
   async validateSplits(songId: string) {
     const recipients = await prisma.royaltyRecipient.findMany({ where: { songId } });
-    const sum = recipients.reduce((s, r) => s + r.splitPercentageBps, 0);
+    const sum = recipients.reduce((s: number, r: { splitPercentageBps: number }) => s + r.splitPercentageBps, 0);
     return { recipients, sum, valid: sum === 10000 && recipients.length > 0 };
   },
 };

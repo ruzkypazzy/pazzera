@@ -121,7 +121,7 @@ export class FacilitatorService {
     //     realtime server has already consumed the nonce, but if a path
     //     bypasses realtime this still rejects replay.
     try {
-      const { consumeNonce } = await import('../../realtime/nonce-store');
+      const { consumeNonce } = await import('@pazzera/realtime/nonce-store');
       const fresh = await consumeNonce({ nonce: input.nonce, streamId: '' });
       if (!fresh) {
         await this.recordFailure(input.paymentId, 'replay_nonce', false);

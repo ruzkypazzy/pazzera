@@ -67,12 +67,12 @@ export function hashAuthorization(auth: TransferWithAuthorization): Hex {
  * Sign an authorization with a private key. Returns v, r, s ready to ship
  * to Circle Gateway.
  */
-export function signAuthorization(
+export async function signAuthorization(
   privateKey: Hex,
   auth: TransferWithAuthorization,
-): { v: number; r: Hex; s: Hex } {
+): Promise<{ v: number; r: Hex; s: Hex }> {
   const account = privateKeyToAccount(privateKey);
-  const signature = account.signTypedData({
+  const signature = await account.signTypedData({
     domain: getEip712Domain(),
     types: EIP712_TYPES,
     primaryType: 'TransferWithAuthorization',

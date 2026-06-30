@@ -1,21 +1,17 @@
 /**
  * AI Agents package.
  *
- * Each agent has:
- *   1. A pure decision function (no I/O, easy to test)
- *   2. A job handler (loads context, calls decision function, persists result)
+ * Pure decision functions are in `./curator/decide`, `./fan/decide`,
+ * `./split/decide`, `./discovery/decide`. Workers in `./workers/*`.
  *
- * Workers live in `./workers/*`. The actual Fan/Split/Curator decision
- * functions live in `./curator`, `./fan`, `./split` respectively.
+ * The light-weight utils (`drift-counters`) are re-exported here; the
+ * heavier ones (`agent-health`, `record-decision`) are intentionally
+ * NOT re-exported from this barrel to keep the import graph slim for
+ * web/server callers — import them directly when needed.
  */
 export * from './curator/decide';
 export * from './fan/decide';
 export * from './split/decide';
 export * from './discovery/decide';
-export * from './workers/curator-worker';
-export * from './workers/fan-worker';
-export * from './workers/split-worker';
-export * from './workers/discovery-worker';
-export * from './workers/wallet-provision-worker';
-export * from './workers/wallet-indexer-worker';
-export * from './workers/auth-cleanup-worker';
+export * from './workers/wallet-reconcile-worker';
+export { driftCounters, resetDriftCounters } from './utils/drift-counters';

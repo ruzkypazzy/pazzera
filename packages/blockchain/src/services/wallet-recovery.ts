@@ -66,7 +66,7 @@ export const WalletRecoveryService = {
 
     // In real impl: send the challenge to the user's verified email via Resend
     // For hackathon dev: log it (no secret actually leaves the server)
-    logger.info({ userId, walletId: wallet.id }, 'wallet_recovery:requested');
+    logger.info({ userId: wallet.userId, walletId: wallet.id }, 'wallet_recovery:requested');
 
     return { challenge, expiresAt };
   },
@@ -158,7 +158,7 @@ export const WalletRecoveryService = {
     await revokeAllForUser(opts.userId, 'suspicion', exceptId);
 
     logger.info(
-      { userId, walletId: wallet.id, newAddress: fresh.address, reason: rec.reason },
+      { userId: opts.userId, walletId: wallet.id, newAddress: fresh.address, reason: rec.reason },
       'wallet_recovery:completed',
     );
 

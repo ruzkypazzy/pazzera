@@ -132,7 +132,7 @@ const LOW_PRIORITY: JobsOptions = {
 
 const queueCache = new Map<string, Queue>();
 
-function getQueue(name: QueueName): Queue {
+export function getQueue(name: QueueName): Queue {
   const cached = queueCache.get(name);
   if (cached) return cached;
   const q = new Queue(name, {

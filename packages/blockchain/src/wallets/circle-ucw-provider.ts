@@ -25,10 +25,10 @@
  */
 import type { Address } from 'viem';
 import {
-  getArcPublicClient,
   baseUnitsToUsdc,
   usdcAddress,
 } from '../adapters/usdc';
+import { getArcPublicClient } from '../adapters/arc';
 import type {
   WalletProvider,
   WalletProvisionInput,
@@ -82,7 +82,7 @@ export class CircleWalletProvider implements WalletProvider {
       abi: USDC_BALANCEOF_ABI,
       functionName: 'balanceOf',
       args: [address as Address],
-    })) as bigint;
+    } as never)) as bigint;
     const blockNumber = Number(await client.getBlockNumber());
     const balanceBaseUnits = balance.toString();
     return {

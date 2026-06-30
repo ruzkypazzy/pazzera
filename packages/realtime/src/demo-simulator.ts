@@ -33,7 +33,7 @@ async function pickSongIds(): Promise<string[]> {
     select: { id: true },
     take: 5,
   });
-  return songs.map((s) => s.id);
+  return songs.map((s: { id: string }) => s.id);
 }
 
 interface SimState {

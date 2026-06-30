@@ -59,7 +59,7 @@ const POST_SCHEMA = z.object({
   note: z.string().max(500).optional(),
 });
 
-export const POST = withApi(async (req: Request) => {
+export const POST = withApi(async (req: any) => {
   const { session, me } = await requireAdmin();
   const body = await req.json().catch(() => null);
   const parsed = POST_SCHEMA.safeParse(body);

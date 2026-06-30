@@ -143,10 +143,8 @@ export async function runWalletIndexerWorker() {
               { type: 'address', name: 'to',   indexed: true },
               { type: 'uint256', name: 'value', indexed: false },
             ] },
-            args: {},
             fromBlock: BigInt(start),
             toBlock: BigInt(end),
-            topics: [TRANSFER_EVENT_TOPIC],
           });
           for (const log of logs) {
             const from = log.topics[1] as `0x${string}`;

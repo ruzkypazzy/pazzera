@@ -6,7 +6,6 @@
  *   Falls back to a JSON snapshot if the client sends Accept: application/json.
  */
 import { withApi, requireSession, prisma, AppError } from '@pazzera/core';
-import { env } from '@pazzera/core/config/env';
 
 async function requireAdmin() {
   const session = await requireSession();
@@ -16,7 +15,7 @@ async function requireAdmin() {
   if (!isAdmin) throw new AppError('FORBIDDEN', 'Admin access required', 403);
 }
 
-export const GET = withApi(async (req: Request) => {
+export const GET = withApi(async (req: any) => {
   await requireAdmin();
   const accept = req.headers.get('accept') ?? '';
   if (accept.includes('application/json')) {
@@ -85,7 +84,6 @@ export const GET = withApi(async (req: Request) => {
           send('error', { message: 'poll failed' });
         }
       }, 2_000);
-      void env;
     },
     cancel() {
       if (interval) clearInterval(interval);

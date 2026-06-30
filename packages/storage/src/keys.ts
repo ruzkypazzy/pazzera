@@ -78,3 +78,16 @@ export function songIdFromKey(key: string): string | null {
   const m = key.match(/^songs\/(?:audio|previews|waveforms|covers|covers\/thumbs|covers\/medium|misc)\/([^/]+)\//);
   return m && m[1] && !m[1].startsWith('misc') ? m[1] : null;
 }
+
+/**
+ * Max accepted audio upload size — 100MB.
+ * Picked to fit a 25-minute 320 kbps MP3 with margin for container overhead.
+ */
+export const AUDIO_MAX_BYTES = 100 * 1024 * 1024;
+
+/**
+ * Max accepted cover image upload size — 8MB.
+ * Most platform covers are well under 2MB; 8MB gives generous headroom
+ * for uncompressed PNG originals before thumbnailing.
+ */
+export const IMAGE_MAX_BYTES = 8 * 1024 * 1024;

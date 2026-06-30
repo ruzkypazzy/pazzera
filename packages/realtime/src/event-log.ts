@@ -28,7 +28,6 @@ export async function recordEvent(opts: {
   meta?: Record<string, unknown>;
 }): Promise<void> {
   try {
-    const meta = opts.meta ? JSON.parse(JSON.stringify(opts.meta)) : undefined;
     await prisma.paymentEvent.create({
       data: {
         kind: opts.kind,
@@ -38,7 +37,10 @@ export async function recordEvent(opts: {
         userId: opts.userId,
         amountUsdc: opts.amountUsdc,
         severity: opts.severity ?? 0,
-        meta,
+        // Prisma's `Json?` field type has a deeply recursive generic that
+        // blows up TS 5.x inference. Cast through `any` to keep call sites
+        // clean while preserving runtime semantics.
+        meta: opts.meta as any,
       },
     });
   } catch {

@@ -63,7 +63,7 @@ export const PATCH = withApi(
 
     if (body.username) {
       const v = validateUsername(body.username);
-      if (!v.ok) throw new ValidationError(v.reason);
+      if (!v.ok) throw new ValidationError((v as { reason: string }).reason);
       const conflict = await prisma.user.findFirst({
         where: { username: v.value, NOT: { id: session.userId } },
         select: { id: true },

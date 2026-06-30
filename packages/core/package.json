@@ -20,6 +20,9 @@
     "vitest": "^1.6.0"
   },
   "dependencies": {
+    "@pazzera/db": "workspace:*",
+    "@pazzera/queue": "workspace:*",
+    "@pazzera/storage": "workspace:*",
     "hash-wasm": "^4.11.0",
     "ioredis": "^5.4.1",
     "pino": "^9.2.0",

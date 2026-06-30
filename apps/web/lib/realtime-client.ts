@@ -5,28 +5,23 @@
  *   - Lazy-connect when the user starts playing a track.
  *   - Send playback:start, playback:tick (every 5s + on demand).
  *   - Handle reconnect via sessionToken; replay any buffered ticks on resume.
- *   - Expose a typed EventTarget-style API for components to subscribe to:
- *       payment_due, payment_settled, payment_failed, threshold_crossed,
- *       joined, ack_tick, error, disconnected.
+ *
+ * Event subscription: uses thin typed accessors over the raw Socket.
  */
 import { io, type Socket } from 'socket.io-client';
-import type {
-  ClientToServerEvents,
-  ServerToClientEvents,
-} from '@pazzera/realtime';
-import type { PlaybackTickPayload } from '@pazzera/realtime';
-import { getCookie } from './cookie';
 
 const TICK_INTERVAL_MS = 5_000;
-const SOCKET_URL = (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_REALTIME_URL) || 'http://localhost:3001';
+const SOCKET_URL =
+  (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_REALTIME_URL) ||
+  'http://localhost:3001';
 
-let socket: Socket<ServerToClientEvents, ClientToServerEvents> | null = null;
+let socket: Socket | null = null;
 let tickInterval: ReturnType<typeof setInterval> | null = null;
 const eventListeners = new Map<string, Set<(payload: unknown) => void>>();
 let sessionToken: string | null = null;
 let songId: string | null = null;
 let durationSec = 0;
-let bufferedTicks: PlaybackTickPayload[] = [];
+const bufferedTicks: unknown[] = [];
 const MAX_BUFFERED = 60;
 let isReconnecting = false;
 let visibleFlushTimer: ReturnType<typeof setInterval> | null = null;
@@ -40,7 +35,7 @@ export interface PlaybackState {
   queuePosition: number;
 }
 
-export function emit(event: string, payload: unknown): void {
+function emit(event: string, payload: unknown): void {
   const set = eventListeners.get(event);
   if (!set) return;
   for (const fn of set) fn(payload);
@@ -65,7 +60,7 @@ export function subscribeAckTick(fn: (p: unknown) => void): () => void { return 
 export function subscribeError(fn: (p: unknown) => void): () => void { return on('error', fn); }
 export function subscribeDisconnected(fn: (p: unknown) => void): () => void { return on('disconnected', fn); }
 
-export function getSocket(): Socket<ServerToClientEvents, ClientToServerEvents> | null {
+export function getSocket(): Socket | null {
   return socket;
 }
 
@@ -80,19 +75,14 @@ export async function startRealtime(opts: {
   playbackState: () => PlaybackState;
   isResume?: boolean;
 }): Promise<string> {
-  if (socket && socket.connected) {
-    return sessionToken ?? '';
-  }
-  if (socket) {
-    // already trying
-    return sessionToken ?? '';
-  }
+  if (socket && socket.connected) return sessionToken ?? '';
+  if (socket) return sessionToken ?? '';
 
   socket = io(SOCKET_URL, {
     transports: ['websocket', 'polling'],
     auth: {
       userId: opts.userId,
-      sessionToken: getCookie('csrf'),
+      sessionToken: typeof document !== 'undefined' ? getCookie('csrf') : undefined,
     },
     reconnection: true,
     reconnectionAttempts: Infinity,
@@ -100,19 +90,15 @@ export async function startRealtime(opts: {
     reconnectionDelayMax: 8_000,
   });
 
-  // Wire server events to our EventTarget
   socket.on('connect', () => {
     emit('connected', { connected: true });
-    if (isReconnecting && sessionToken) {
-      // Replay any client-side buffered ticks
-      if (bufferedTicks.length > 0) {
-        socket!.emit('playback:flush_buffer', {
-          streamId: sessionToken,
-          sessionToken,
-          ticks: bufferedTicks,
-        });
-        bufferedTicks = [];
-      }
+    if (isReconnecting && sessionToken && bufferedTicks.length > 0) {
+      socket!.emit('playback:flush_buffer', {
+        streamId: sessionToken,
+        sessionToken,
+        ticks: bufferedTicks,
+      });
+      bufferedTicks.length = 0;
     }
   });
   socket.on('disconnect', (reason) => {
@@ -126,14 +112,14 @@ export async function startRealtime(opts: {
   socket.on('payment_failed', (p) => emit('payment_failed', p));
   socket.on('ack_tick', (p) => emit('ack_tick', p));
   socket.on('error', (p) => emit('error', p));
-  socket.on('disconnected' as never, (p: never) => emit('disconnected', p));
+  socket.on('disconnected', (p: unknown) => emit('disconnected', p));
 
-  // Wait for connect, then emit playback:start
   await new Promise<void>((resolve) => {
     socket!.on('connect', () => resolve());
   });
-  // Generate / restore session token
-  sessionToken = opts.isResume && sessionToken ? sessionToken : `cs_${crypto.randomUUID().replace(/-/g, '')}`;
+  sessionToken = opts.isResume && sessionToken
+    ? sessionToken
+    : `cs_${crypto.randomUUID().replace(/-/g, '')}`;
   songId = opts.songId;
   durationSec = opts.durationSec;
   socket!.emit('playback:start', {
@@ -152,13 +138,20 @@ export async function startRealtime(opts: {
   });
   startTicker(opts.playbackState);
 
-  // Visibility change handler — flush buffer on tab focus
   if (typeof document !== 'undefined') {
     if (visibleFlushTimer) clearInterval(visibleFlushTimer);
     visibleFlushTimer = setInterval(() => {
-      if (document.visibilityState === 'visible' && bufferedTicks.length > 0 && isConnected()) {
-        socket?.emit('playback:flush_buffer', { streamId: sessionToken ?? '', sessionToken: sessionToken ?? '', ticks: bufferedTicks });
-        bufferedTicks = [];
+      if (
+        document.visibilityState === 'visible' &&
+        bufferedTicks.length > 0 &&
+        isConnected()
+      ) {
+        socket?.emit('playback:flush_buffer', {
+          streamId: sessionToken ?? '',
+          sessionToken: sessionToken ?? '',
+          ticks: bufferedTicks,
+        });
+        bufferedTicks.length = 0;
       }
     }, 5_000);
   }
@@ -171,7 +164,7 @@ function startTicker(getState: () => PlaybackState): void {
   tickInterval = setInterval(() => {
     if (!socket || !sessionToken || !songId) return;
     const state = getState();
-    const payload: PlaybackTickPayload = {
+    const payload = {
       sessionId: sessionToken,
       songId,
       currentTimeSec: state.positionSec,
@@ -206,10 +199,7 @@ export async function pause(): Promise<void> {
 }
 
 export async function resume(getState: () => PlaybackState): Promise<void> {
-  if (!socket || !sessionToken || !songId) {
-    // Need to reconnect
-    return;
-  }
+  if (!socket || !sessionToken || !songId) return;
   socket.emit('playback:resume', {
     sessionId: sessionToken,
     songId,
@@ -257,7 +247,7 @@ export async function disconnect(): Promise<void> {
   }
   sessionToken = null;
   songId = null;
-  bufferedTicks = [];
+  bufferedTicks.length = 0;
 }
 
 export function getSessionToken(): string | null {
@@ -266,4 +256,10 @@ export function getSessionToken(): string | null {
 
 export function getBufferedTickCount(): number {
   return bufferedTicks.length;
+}
+
+function getCookie(name: string): string | undefined {
+  if (typeof document === 'undefined') return undefined;
+  const m = document.cookie.split(';').map((s) => s.trim()).find((s) => s.startsWith(`${name}=`));
+  return m?.split('=')[1];
 }

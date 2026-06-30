@@ -43,11 +43,11 @@ export class CircleRealProvider implements CircleProvider {
   private get baseUrl() { return getEnv().CIRCLE_BASE_URL; }
   private get walletSetId() { return getEnv().CIRCLE_WALLET_SET_ID; }
   private get apiKey() { return getEnv().CIRCLE_API_KEY; }
-  private get gatewayUrl() { return getEnv().GATEWAY_FACILITATOR_URL; }
+  private get gatewayUrl() { return getEnv().CIRCLE_GATEWAY_FACILITATOR_URL; }
 
   async createWallet(input: CircleCreateWalletInput): Promise<CircleCreateWalletResult> {
     const idempotencyKey = input.idempotencyKey ?? randomBytes(16).toString('hex');
-    const data = await this.request<CircleCreateWalletResult>({
+    const resp = await this.request<{ data?: CircleCreateWalletResult } & CircleCreateWalletResult>({
       method: 'POST',
       url: `${this.baseUrl}/v1/w3s/wallets`,
       body: {
@@ -57,7 +57,7 @@ export class CircleRealProvider implements CircleProvider {
       },
       idempotencyKey,
     });
-    const account = data.data ?? (data as unknown as CircleCreateWalletResult);
+    const account = (resp.data ?? resp) as unknown as CircleCreateWalletResult;
     return {
       walletId: account.walletId,
       address: account.address,

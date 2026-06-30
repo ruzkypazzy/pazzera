@@ -130,6 +130,29 @@ export async function validateSession(
   };
 }
 
+/**
+ * Read the current session token from a cookie header. Pure helper — the
+ * Next route handler is expected to pass `cookieHeader`. Returns the raw
+ * token (un-hashed) so callers can feed it into validateSession.
+ */
+export function readSessionFromCookies(cookieHeader: string | null | undefined, cookieName = 'pazzera_sess'): string | null {
+  if (!cookieHeader) return null;
+  for (const piece of cookieHeader.split(';')) {
+    const [k, ...rest] = piece.trim().split('=');
+    if (k === cookieName) return decodeURIComponent(rest.join('='));
+  }
+  return null;
+}
+
+/**
+ * Convenience: read + validate the current session if one exists.
+ * Returns `null` when there is no valid session.
+ */
+export async function getCurrentSession(opts: { cookieHeader?: string | null } = {}): Promise<ValidatedSession | null> {
+  const token = readSessionFromCookies(opts.cookieHeader ?? null);
+  return validateSession(token, { touch: true });
+}
+
 export async function revokeSession(
   sessionId: string,
   reason: 'logout' | 'admin_revoke' | 'password_reset' | 'suspicion' = 'logout',

@@ -24,14 +24,14 @@ import { logger } from '@pazzera/core';
 import { decideDiscovery, type DiscoveryInput } from '../discovery/decide';
 import { recordDecision } from '../utils/record-decision';
 import { AgentHealthTracker } from '../utils/agent-health';
-import { env } from '@pazzera/core/config/env';
+import { getEnv } from '@pazzera/core';
 
 const tracker = new AgentHealthTracker(prisma, 'discovery');
 
 const CACHE_TTL_SECONDS = 6 * 3600;
 
 function getRedis(): Redis {
-  return new Redis(env.REDIS_URL, { maxRetriesPerRequest: 2 });
+  return new Redis(getEnv().REDIS_URL, { maxRetriesPerRequest: 2 });
 }
 
 async function userSignals(userId: string): Promise<{
@@ -53,12 +53,12 @@ async function userSignals(userId: string): Promise<{
     orderBy: { startedAt: 'desc' },
     take: 200,
   });
-  const totalListenSec = streams.reduce((s, r) => s + r.totalActiveMs / 1000, 0);
-  const completedCount = streams.filter((r) => r.totalActiveMs / 1000 >= r.song.durationSeconds * 0.25).length;
+  const totalListenSec = streams.reduce((s: number, r: { totalActiveMs: number }) => s + r.totalActiveMs / 1000, 0);
+  const completedCount = streams.filter((r: { totalActiveMs: number; song: { durationSeconds: number } }) => r.totalActiveMs / 1000 >= r.song.durationSeconds * 0.25).length;
   const completionRate = streams.length === 0 ? 0 : completedCount / streams.length;
 
   const recentSimilarListen = streams.length === 0 ? 0 : Math.min(1, streams.length / 30);
-  const recentListenTitles = streams.slice(0, 5).map((r) => r.song.title);
+  const recentListenTitles = streams.slice(0, 5).map((r: { song: { title: string } }) => r.song.title);
   const similarSongTitle = streams[0]?.song.title ?? null;
 
   // Wallet spend affinity — pay per stream is an interest signal.
@@ -122,7 +122,7 @@ export async function materializeForUser(userId: string, redis: Redis): Promise<
   });
 
   const recs = await Promise.all(
-    candidates.map(async (c) => {
+    candidates.map(async (c: { id: string; artistId: string }) => {
       const cs = await candidateSignals(c.id, c.artistId);
       const input: DiscoveryInput = {
         userId,

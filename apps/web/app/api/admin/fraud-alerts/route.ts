@@ -18,7 +18,7 @@ async function requireAdmin() {
   return { session, me };
 }
 
-export const GET = withApi(async (req: Request) => {
+export const GET = withApi(async (req: any) => {
   await requireAdmin();
   const url = new URL(req.url);
   const severity = url.searchParams.get('severity');
@@ -41,7 +41,7 @@ const POST_SCHEMA = z.object({
   note: z.string().max(500).optional(),
 });
 
-export const POST = withApi(async (req: Request) => {
+export const POST = withApi(async (req: any) => {
   const { session } = await requireAdmin();
   const body = await req.json().catch(() => null);
   const parsed = POST_SCHEMA.safeParse(body);

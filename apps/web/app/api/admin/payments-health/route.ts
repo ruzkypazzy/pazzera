@@ -11,7 +11,7 @@
  *        avg_settlement_latency_ms, webhook_lag_ms, balance_drift_count
  */
 import { withApi, requireSession, prisma, AppError } from '@pazzera/core';
-import { driftCounters } from '@pazzera/agents/workers/wallet-reconcile-worker';
+import { driftCounters } from '@pazzera/agents/utils/drift-counters';
 
 async function requireAdmin() {
   const session = await requireSession();

@@ -1,17 +1,15 @@
 /**
  * Analytics rollup worker — materializes Platform / Song / Artist
- * metrics into DailyMetrics, SongMetrics, ArtistMetrics, and the
- * AgentStatus surface for the admin dashboard.
- *
- * 3 cadences:
- *   - 5min  → updates today-to-date counters in-memory via temp tables
- *             and recent Streams/SongMetrics caches
- *   - hour  → recomputes SongMetrics + ArtistMetrics from last 24h
- *   - day   → snapshots yesterday into DailyMetrics
+ * metrics into DailyMetrics, SongMetrics, ArtistMetrics.
  *
  * Phase 7 contract:
  *   - Idempotent: re-running the same window produces the same upserts.
- *   - Deterministic: pure SQL aggregations, no ML.
+ *   - Deterministic: pure SQL aggregations + manual String-field sums.
+ *
+ * Note: Prisma 5.22's typed-aggregate input surface doesn't expose String
+ * fields (only numeric + boolean), so we fetch the rows and reduce in JS
+ * for amountUsdc / amountBaseUnits. For a million-row table this would
+ * be a SQL aggregation; for our scale it's fine.
  */
 import { Worker, type Job } from 'bullmq';
 import { getQueueConnection, QUEUE_NAMES } from '@pazzera/queue';
@@ -34,6 +32,17 @@ function startOfWindow5min(d: Date): Date {
   return new Date(bucket);
 }
 
+/** Sum a list of decimal strings into a single decimal string (BigInt math). */
+function sumStrings(rows: Array<{ amountUsdc?: string; amountBaseUnits?: string }>, key: 'amountUsdc' | 'amountBaseUnits'): string {
+  let total = 0n;
+  for (const r of rows) {
+    const v = r[key];
+    if (!v) continue;
+    total += BigInt(v);
+  }
+  return total.toString();
+}
+
 async function rollupPlatformDaily(now: Date): Promise<void> {
   const yesterday = new Date(now);
   yesterday.setDate(yesterday.getDate() - 1);
@@ -50,14 +59,14 @@ async function rollupPlatformDaily(now: Date): Promise<void> {
     }),
     prisma.stream.count({ where: { startedAt: { gte: dayStart, lt: dayEnd }, flaggedAbuse: true } }),
     prisma.manualReview.count({ where: { createdAt: { gte: dayStart, lt: dayEnd } } }),
-    prisma.payment.aggregate({
+    prisma.payment.findMany({
       where: { createdAt: { gte: dayStart, lt: dayEnd }, status: { in: ['settled', 'distributed'] } },
-      _sum: { amountBaseUnits: true, amountUsdc: true },
+      select: { amountBaseUnits: true, amountUsdc: true },
     }),
   ]);
 
-  const revenueBase = settledPayments._sum.amountBaseUnits ?? '0';
-  const revenueUsdc = settledPayments._sum.amountUsdc ?? '0';
+  const revenueBaseUnits = sumStrings(settledPayments, 'amountBaseUnits');
+  const revenueUsdc = sumStrings(settledPayments, 'amountUsdc');
 
   await prisma.dailyMetrics.upsert({
     where: { date: dayStart },
@@ -66,7 +75,7 @@ async function rollupPlatformDaily(now: Date): Promise<void> {
       newUsers: users,
       totalStreams: streams,
       uniqueListeners: listeners.length,
-      revenueBaseUnits: revenueBase,
+      revenueBaseUnits,
       revenueUsdc,
       flaggedStreams: flagged,
       manualReviewCount: manualReviews,
@@ -75,7 +84,7 @@ async function rollupPlatformDaily(now: Date): Promise<void> {
       totalStreams: streams,
       uniqueListeners: listeners.length,
       newUsers: users,
-      revenueBaseUnits: revenueBase,
+      revenueBaseUnits,
       revenueUsdc,
       flaggedStreams: flagged,
       manualReviewCount: manualReviews,
@@ -88,17 +97,19 @@ async function rollupSongMetrics(): Promise<number> {
   let updated = 0;
   for (const s of songs) {
     const since = new Date(Date.now() - 7 * 86_400_000);
-    const [streams7d, revenue7d, completed, totalRecent, last] = await Promise.all([
+    const [streams7d, payments7d, completed, totalRecent, last] = await Promise.all([
       prisma.stream.count({ where: { songId: s.id, startedAt: { gte: since } } }),
-      prisma.payment.aggregate({
+      prisma.payment.findMany({
         where: { songId: s.id, status: { in: ['settled', 'distributed'] }, createdAt: { gte: since } },
-        _sum: { amountUsdc: true, amountBaseUnits: true },
+        select: { amountUsdc: true, amountBaseUnits: true },
       }),
       prisma.stream.count({ where: { songId: s.id, totalActiveMs: { gte: 25_000 } } }),
       prisma.stream.count({ where: { songId: s.id } }),
       prisma.stream.findFirst({ where: { songId: s.id }, orderBy: { startedAt: 'desc' }, select: { startedAt: true } }),
     ]);
     const completionRate = totalRecent === 0 ? 0 : completed / totalRecent;
+    const revenue7dBaseUnits = sumStrings(payments7d, 'amountBaseUnits');
+    const revenue7dUsdc = sumStrings(payments7d, 'amountUsdc');
     await prisma.songMetrics.upsert({
       where: { songId: s.id },
       create: {
@@ -107,15 +118,17 @@ async function rollupSongMetrics(): Promise<number> {
         uniqueListenerCount: s.uniqueListenerCount,
         completionRate,
         totalRevenueUsdc: '0',
+        totalRevenueBaseUnits: revenue7dBaseUnits,
         streamsLast7d: streams7d,
-        revenueLast7dUsdc: revenue7d._sum.amountUsdc ?? '0',
-        lastStreamAt: last?.startedAt,
+        revenueLast7dUsdc: revenue7dUsdc,
+        lastStreamAt: last?.startedAt ?? null,
       },
       update: {
         completionRate,
+        totalRevenueBaseUnits: revenue7dBaseUnits,
         streamsLast7d: streams7d,
-        revenueLast7dUsdc: revenue7d._sum.amountUsdc ?? '0',
-        lastStreamAt: last?.startedAt,
+        revenueLast7dUsdc: revenue7dUsdc,
+        lastStreamAt: last?.startedAt ?? null,
       },
     });
     updated += 1;
@@ -127,16 +140,16 @@ async function rollupArtistMetrics(): Promise<number> {
   const artists = await prisma.user.findMany({ where: { isArtist: true }, select: { id: true } });
   let updated = 0;
   for (const a of artists) {
-    const [songs, published, earnings7d, earningsLifetime, streams30d, uniqueListeners30d, last] = await Promise.all([
+    const [songs, published, payouts7d, payoutsLifetime, streams30d, uniqueListeners30d, last] = await Promise.all([
       prisma.song.count({ where: { artistId: a.id } }),
       prisma.song.count({ where: { artistId: a.id, status: 'published' } }),
-      prisma.payout.aggregate({
+      prisma.payout.findMany({
         where: { recipientUserId: a.id, createdAt: { gte: new Date(Date.now() - 30 * 86_400_000) } },
-        _sum: { amountUsdc: true },
+        select: { amountUsdc: true, amountBaseUnits: true },
       }),
-      prisma.payout.aggregate({
+      prisma.payout.findMany({
         where: { recipientUserId: a.id },
-        _sum: { amountUsdc: true },
+        select: { amountUsdc: true, amountBaseUnits: true },
       }),
       prisma.stream.count({
         where: { song: { artistId: a.id }, startedAt: { gte: new Date(Date.now() - 30 * 86_400_000) } },
@@ -152,26 +165,36 @@ async function rollupArtistMetrics(): Promise<number> {
         select: { startedAt: true },
       }),
     ]);
+    const monthlyEarningsUsdc = sumStrings(payouts7d, 'amountUsdc');
+    const monthlyEarningsBaseUnits = sumStrings(payouts7d, 'amountBaseUnits');
+    const totalEarningsUsdc = sumStrings(payoutsLifetime, 'amountUsdc');
+    const totalEarningsBaseUnits = sumStrings(payoutsLifetime, 'amountBaseUnits');
     await prisma.artistMetrics.upsert({
       where: { artistId: a.id },
       create: {
         artistId: a.id,
         songCount: songs,
         publishedSongCount: published,
-        monthlyEarningsUsdc: earnings7d._sum.amountUsdc ?? '0',
-        totalEarningsUsdc: earningsLifetime._sum.amountUsdc ?? '0',
+        monthlyEarningsUsdc,
+        monthlyEarningsBaseUnits,
+        totalEarningsUsdc,
+        totalEarningsBaseUnits,
         streamsLast30d: streams30d,
+        activeListeners30d: uniqueListeners30d.length,
         uniqueListeners30d: uniqueListeners30d.length,
-        lastStreamAt: last?.startedAt,
+        lastStreamAt: last?.startedAt ?? null,
       },
       update: {
         songCount: songs,
         publishedSongCount: published,
-        monthlyEarningsUsdc: earnings7d._sum.amountUsdc ?? '0',
-        totalEarningsUsdc: earningsLifetime._sum.amountUsdc ?? '0',
+        monthlyEarningsUsdc,
+        monthlyEarningsBaseUnits,
+        totalEarningsUsdc,
+        totalEarningsBaseUnits,
         streamsLast30d: streams30d,
+        activeListeners30d: uniqueListeners30d.length,
         uniqueListeners30d: uniqueListeners30d.length,
-        lastStreamAt: last?.startedAt,
+        lastStreamAt: last?.startedAt ?? null,
       },
     });
     updated += 1;
@@ -194,9 +217,9 @@ async function rollupPlatformRealtime(now: Date): Promise<{
       select: { userId: true },
     }),
     prisma.stream.count({ where: { startedAt: { gte: since } } }),
-    prisma.payment.aggregate({
+    prisma.payment.findMany({
       where: { createdAt: { gte: since } },
-      _sum: { amountUsdc: true },
+      select: { amountUsdc: true },
     }),
     prisma.stream.findMany({
       where: { startedAt: { gte: since } },
@@ -205,11 +228,11 @@ async function rollupPlatformRealtime(now: Date): Promise<{
     }),
     prisma.stream.count({ where: { startedAt: { gte: since }, flaggedAbuse: true } }),
   ]);
-  const artistIds = new Set(artists.map((a) => a.song.artistId));
+  const artistIds = new Set<string>(artists.map((a: { song: { artistId: string } }) => a.song.artistId));
   return {
-    dau: listeners.length, // approximated — to be combined with daily snapshot for exact DAU
+    dau: listeners.length,
     streams5m: streams,
-    revenue5mUsdc: payments._sum.amountUsdc ?? '0',
+    revenue5mUsdc: sumStrings(payments, 'amountUsdc'),
     uniqueArtists: artistIds.size,
     flagged5m: flagged,
   };

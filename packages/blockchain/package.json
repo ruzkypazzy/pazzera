@@ -15,6 +15,9 @@
   },
   "dependencies": {
     "@pazzera/core": "workspace:*",
+    "@pazzera/db": "workspace:*",
+    "@pazzera/queue": "workspace:*",
+    "@pazzera/realtime": "workspace:*",
     "viem": "^2.13.0"
   },
   "devDependencies": {

@@ -28,7 +28,7 @@ export async function recordAuthEvent(input: AuthEventInput): Promise<void> {
         ipHash: input.ipHash ?? null,
         userAgent: input.userAgent ?? null,
         severity: input.severity ?? 0,
-        meta: (input.meta ?? null) as object | null,
+        meta: input.meta ? (JSON.parse(JSON.stringify(input.meta)) as object) : null,
       },
     });
   } catch (err) {

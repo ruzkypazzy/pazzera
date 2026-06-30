@@ -126,7 +126,7 @@ export async function startProcessing(songId: string): Promise<void> {
   // (validated after metadata extraction; the 30s minimum is enforced there)
 
   // Recipients must total 10000 bps
-  const totalBps = song.recipients.reduce((s, r) => s + r.splitPercentageBps, 0);
+  const totalBps = song.recipients.reduce((s: number, r: { splitPercentageBps: number }) => s + r.splitPercentageBps, 0);
   if (totalBps !== 10000) {
     await prisma.song.update({
       where: { id: songId },
@@ -233,7 +233,7 @@ export async function runAudioStep(songId: string, sourceKey: string): Promise<v
         audioCodec: meta.codec,
         audioContainer: meta.containerFormat,
         audioHash: binaryHash,
-        acousticHash: ac.hash,
+        acousticHash: ac.acousticHash,
         audioLufsIntegrated: meta.lufsIntegrated,
         audioLufsRange: meta.lufsRange,
         audioTruePeakDb: meta.truePeakDb,

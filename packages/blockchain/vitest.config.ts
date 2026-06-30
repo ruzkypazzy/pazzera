@@ -10,6 +10,7 @@ export default defineConfig({
     include: ['tests/phase9-payment.test.ts', 'tests/x402.test.ts'],
     globals: false,
     testTimeout: 30000,
+    setupFiles: ['./tests/_env-setup.ts'],
   },
   resolve: {
     alias: [

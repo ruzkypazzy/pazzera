@@ -75,7 +75,9 @@ export async function runCuratorWorker() {
         // Username resolution
         const usernames = [
           song.artistUsername,
-          ...song.recipients.filter((r) => r.role !== 'primary_artist').map((r) => r.username),
+          ...song.recipients
+            .filter((r: { role: string }) => r.role !== 'primary_artist')
+            .map((r: { username: string }) => r.username),
         ];
         const resolvedUsers = await prisma.user.findMany({
           where: { username: { in: usernames } },
@@ -90,9 +92,16 @@ export async function runCuratorWorker() {
           _count: { _all: true },
         });
         const totals = {
-          totalSongs: artistHistory.reduce((s, r) => s + r._count._all, 0),
-          approvedSongs: artistHistory.find((r) => r.curatorStatus === 'approved')?._count._all ?? 0,
-          rejectedSongs: artistHistory.find((r) => r.curatorStatus === 'rejected')?._count._all ?? 0,
+          totalSongs: artistHistory.reduce(
+            (s: number, r: { _count: { _all: number } }) => s + r._count._all,
+            0,
+          ),
+          approvedSongs:
+            artistHistory.find((r: { curatorStatus: string }) => r.curatorStatus === 'approved')
+              ?._count._all ?? 0,
+          rejectedSongs:
+            artistHistory.find((r: { curatorStatus: string }) => r.curatorStatus === 'rejected')
+              ?._count._all ?? 0,
           flaggedForSpam: 0,
         };
 

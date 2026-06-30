@@ -52,7 +52,7 @@ async function loadStreamSignals(streamId: string): Promise<FanInput | null> {
       where: { deviceFingerprintId: stream.deviceFingerprintId, userId: { not: stream.userId } },
       distinct: ['userId'],
       select: { userId: true },
-    }).then((rows) => rows.length);
+    }).then((rows: { userId: string }[]) => rows.length);
   }
 
   // IP sharing
@@ -62,7 +62,7 @@ async function loadStreamSignals(streamId: string): Promise<FanInput | null> {
       where: { ipAddress: stream.ipAddress, userId: { not: stream.userId }, startedAt: { gte: new Date(Date.now() - 24 * 3600_000) } },
       distinct: ['userId'],
       select: { userId: true },
-    }).then((rows) => rows.length);
+    }).then((rows: { userId: string }[]) => rows.length);
   }
 
   // Prior charges today
