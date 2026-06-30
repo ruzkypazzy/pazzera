@@ -300,6 +300,9 @@ export function AdminDashboard() {
         </Card>
       </section>
 
+      {/* Phase 8 — Streaming health */}
+      <StreamingHealthCard />
+
       <Card icon={<Cpu className="h-4 w-4 text-accent" />} title="Queue & worker health">
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
           {data.queueStatus.map((q) => (
@@ -482,6 +485,50 @@ function AdminSkeleton() {
       </div>
       <Skeleton className="h-64" />
     </div>
+  );
+}
+
+interface StreamingHealth {
+  payment_due_per_min: number;
+  payment_settled_per_min: number;
+  socket_disconnect_per_min: number;
+  suspicious_streams_per_min: number;
+  activeStreams: number;
+  chargedPerMin: number;
+  suspiciousPerMin: number;
+  uniqueListenersLast5Min: number;
+  recentStreamCount5Min: number;
+  timestamp: string;
+}
+
+function StreamingHealthCard() {
+  const [h, setH] = useState<StreamingHealth | null>(null);
+  useEffect(() => {
+    const fetchIt = () => fetch('/api/admin/streaming-health').then((r) => r.json()).then(setH).catch(() => undefined);
+    fetchIt();
+    const t = setInterval(fetchIt, 5_000);
+    return () => clearInterval(t);
+  }, []);
+  if (!h) {
+    return (
+      <Card icon={<Activity className="h-4 w-4 text-accent" />} title="Streaming health">
+        <Skeleton className="h-24 w-full" />
+      </Card>
+    );
+  }
+  return (
+    <Card icon={<Activity className="h-4 w-4 text-accent" />} title="Streaming health (Phase 8)">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
+        <Stat label="Active streams" value={String(h.activeStreams)} />
+        <Stat label="Listeners (5m)" value={String(h.uniqueListenersLast5Min)} />
+        <Stat label="Payment due /m" value={String(h.payment_due_per_min)} />
+        <Stat label="Payment settled /m" value={String(h.payment_settled_per_min)} />
+        <Stat label="Charged /m" value={String(h.chargedPerMin)} />
+        <Stat label="Suspicious /m" value={String(h.suspiciousPerMin)} />
+        <Stat label="Socket disconnect /m" value={String(h.socket_disconnect_per_min)} />
+        <Stat label="Stream starts (5m)" value={String(h.recentStreamCount5Min)} />
+      </div>
+    </Card>
   );
 }
 

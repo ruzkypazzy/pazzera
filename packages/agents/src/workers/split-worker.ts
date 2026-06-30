@@ -142,6 +142,22 @@ export async function runSplitWorker() {
           crossLinks: { paymentId, songId: payment.songId, userId: payment.payerUserId },
         });
 
+        // Phase 8 — broadcast payment_settled to the listener's stream room so
+        // the floating payment toast (Phase 5) can replace the due toast.
+        try {
+          const { emitPaymentSettled } = await import('@pazzera/realtime');
+          await emitPaymentSettled(payment.streamId, {
+            paymentId,
+            songId: payment.songId,
+            amountUsdc: payment.amountUsdc,
+            recipientCount: decision.splits.length,
+            txHash: 'pending-onchain-settlement', // real tx hash will be patched by Phase 9 facilitator callback
+            payoutStatus: decision.payoutStatus,
+          });
+        } catch (err) {
+          logger.warn({ err }, 'split:payment_settled_emit_failed');
+        }
+
         await tracker.success(Date.now() - started);
         logger.info({ paymentId, splits: decision.splits.length }, 'split:done');
       } catch (err) {

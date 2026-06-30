@@ -1,176 +1,394 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
-import { Play, Pause, SkipBack, SkipForward, Volume2, Zap } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { Play, Pause, SkipBack, SkipForward, Volume2, Repeat, Shuffle, Repeat1 } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { usePlayerQueue, type QueuedSong } from '@/lib/player-queue';
+import {
+  startRealtime,
+  pause as socketPause,
+  resume as socketResume,
+  seek as socketSeek,
+  end as socketEnd,
+  disconnect as socketDisconnect,
+  subscribePaymentDue,
+  subscribePaymentSettled,
+  subscribePaymentFailed,
+  subscribeThresholdCrossed,
+  subscribeAckTick,
+  isConnected,
+  getBufferedTickCount,
+} from '@/lib/realtime-client';
+import { WaveformProgress } from './waveform-progress';
 import { cn } from '@/lib/cn';
+import { motion as framer } from 'framer-motion';
 
-interface PlayerState {
+interface ActiveTrack {
   songId: string;
   title: string;
   artist: string;
   coverUrl: string;
   durationSec: number;
   positionSec: number;
-  playing: boolean;
   pricePerStream: string;
-  paymentActive: boolean; // true when a payment just fired
+  audioUrl: string;
+  waveformPeaks?: { min: number[]; max: number[] } | null;
 }
 
-const PLACEHOLDER: PlayerState = {
+const PLACEHOLDER: ActiveTrack = {
   songId: '',
   title: 'Select something to play',
   artist: 'Pazzera',
   coverUrl: '',
   durationSec: 0,
   positionSec: 0,
-  playing: false,
   pricePerStream: '0.002',
-  paymentActive: false,
+  audioUrl: '',
 };
 
+const TICK_INTERVAL_MS = 250; // client-side visual tick (the socket ticks are server-driven at 5s)
+
 /**
- * Sticky player footer. Phase 5 uses a local placeholder state; Phase 8
- * wires the real Socket.IO-driven playback session.
+ * Phase 8 StickyPlayer — drives the audio element, plays the queue,
+ * connects to Socket.IO for the server-authoritative stream session,
+ * and renders the Phase 8 WaveformProgress.
  */
 export function StickyPlayer() {
-  const [state, setState] = useState<PlayerState>(PLACEHOLDER);
+  const queue = usePlayerQueue();
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const tickerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [track, setTrack] = useState<ActiveTrack>(PLACEHOLDER);
+  const [positionSec, setPositionSec] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [volume, setVolume] = useState(0.85);
+  const [hidden, setHidden] = useState(typeof document !== 'undefined' ? document.visibilityState !== 'visible' : false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [thresholdReached, setThresholdReached] = useState(false);
+  const [paymentDuePending, setPaymentDuePending] = useState<{ amount: string; nonce: string; streamId: string } | null>(null);
+  const [paymentSettledFlash, setPaymentSettledFlash] = useState<{ txHash?: string } | null>(null);
+  const bufferedRef = useRef(0);
 
-  // Listen for play-this from any page
+  const current = queue.queue[queue.currentIndex] ?? null;
+
+  // ─── Visibility tracking for socket tick payloads ─────────────
+  useEffect(() => {
+    const onVis = () => setHidden(document.visibilityState !== 'visible');
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
+
+  // ─── Local position ticker (250ms for smooth UI; socket ticks at 5s for the server) ───
+  useEffect(() => {
+    if (!playing) {
+      if (tickerRef.current) { clearInterval(tickerRef.current); tickerRef.current = null; }
+      return;
+    }
+    tickerRef.current = setInterval(() => {
+      const a = audioRef.current;
+      if (a) {
+        setPositionSec(a.currentTime);
+        if (a.ended) handleNext();
+      }
+    }, TICK_INTERVAL_MS);
+    return () => { if (tickerRef.current) { clearInterval(tickerRef.current); tickerRef.current = null; } };
+  }, [playing]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── Listen for "pazzera:play" events from song cards (Phase 5 contract) ─
   useEffect(() => {
     function onPlay(e: Event) {
-      const ce = e as CustomEvent<Partial<PlayerState>>;
-      setState((prev) => ({ ...prev, ...ce.detail, playing: true }));
-      // Simulate the "payment just fired" pulse 2s in
-      setTimeout(() => {
-        setState((p) => ({ ...p, paymentActive: true }));
-        setTimeout(() => setState((p) => ({ ...p, paymentActive: false })), 2000);
-      }, 2000);
+      const ce = e as CustomEvent<{ song: Omit<QueuedSong, 'durationSeconds'> & { durationSeconds: number; pricePerStream: string } }>;
+      const s = ce.detail.song;
+      // Set the queue to this one song if empty
+      if (queue.queue.length === 0) {
+        queue.enqueue([s]);
+      }
+      // Find or set current
+      const idx = queue.queue.findIndex((q) => q.id === s.id);
+      if (idx >= 0) queue.jumpTo(idx);
+      else queue.enqueueNext(s);
     }
     window.addEventListener('pazzera:play', onPlay as EventListener);
     return () => window.removeEventListener('pazzera:play', onPlay as EventListener);
+  }, [queue]);
+
+  // ─── When currentIndex changes, load + optionally play the audio ─────────
+  useEffect(() => {
+    if (!current) {
+      setTrack(PLACEHOLDER);
+      setPositionSec(0);
+      setPlaying(false);
+      return;
+    }
+    setTrack({
+      songId: current.id,
+      title: current.title,
+      artist: current.artistName,
+      coverUrl: current.coverUrl,
+      durationSec: current.durationSeconds,
+      positionSec: 0,
+      pricePerStream: current.publishedPriceUsdc,
+      audioUrl: current.audioUrl,
+      waveformPeaks: current.waveformPeaks,
+    });
+    setPositionSec(0);
+    setThresholdReached(false);
+    const a = audioRef.current;
+    if (a) {
+      a.src = current.audioUrl;
+      a.load();
+      a.play().then(() => {
+        setPlaying(true);
+        // Connect realtime + start streaming session
+        if (typeof window !== 'undefined' && (window as unknown as { __user?: { id: string } }).__user?.id) {
+          void startRealtime({
+            userId: (window as unknown as { __user: { id: string } }).__user.id,
+            songId: current.id,
+            durationSec: current.durationSeconds,
+            isResume: false,
+            playbackState: () => ({
+              positionSec: a.currentTime,
+              muted: a.muted,
+              hidden: document.visibilityState !== 'visible',
+              playbackRate: a.playbackRate,
+              volume: a.volume,
+              queuePosition: queue.currentIndex,
+            }),
+          });
+        }
+      }).catch(() => setPlaying(false));
+    }
+    return () => {
+      // Don't auto-disconnect on song change — the realtime server will
+      // see the previous stream as ended and clean up.
+      void socketEnd();
+    };
+  }, [queue.currentIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── Subscribe to socket events ────────────────────────────────────────
+  useEffect(() => {
+    const offDue = subscribePaymentDue((p) => {
+      const v = p as { streamId: string; amountUsdc: string; nonce: string };
+      setPaymentDuePending({ amount: v.amountUsdc, nonce: v.nonce, streamId: v.streamId });
+    });
+    const offSettled = subscribePaymentSettled((p) => {
+      const v = p as { txHash?: string };
+      setPaymentDuePending(null);
+      setPaymentSettledFlash({ txHash: v.txHash });
+      setThresholdReached(true);
+      setTimeout(() => setPaymentSettledFlash(null), 3000);
+    });
+    const offFailed = subscribePaymentFailed(() => setPaymentDuePending(null));
+    const offThreshold = subscribeThresholdCrossed(() => {
+      setThresholdReached(true);
+    });
+    const offAck = subscribeAckTick((p) => {
+      const v = p as { accumulatedMs: number; thresholdCrossed: boolean };
+      if (v.thresholdCrossed) setThresholdReached(true);
+    });
+    return () => {
+      offDue();
+      offSettled();
+      offFailed();
+      offThreshold();
+      offAck();
+    };
   }, []);
 
-  const progress = state.durationSec > 0 ? (state.positionSec / state.durationSec) * 100 : 0;
-  const isEmpty = !state.songId;
+  const togglePlay = useCallback(async () => {
+    const a = audioRef.current;
+    if (!a) return;
+    if (playing) {
+      a.pause();
+      setPlaying(false);
+      await socketPause();
+    } else {
+      try {
+        await a.play();
+        setPlaying(true);
+        await socketResume(() => ({
+          positionSec: a.currentTime,
+          muted: a.muted,
+          hidden: document.visibilityState !== 'visible',
+          playbackRate: a.playbackRate,
+          volume: a.volume,
+          queuePosition: queue.currentIndex,
+        }));
+      } catch {
+        // ignore
+      }
+    }
+  }, [playing, queue.currentIndex]);
+
+  const handleSeek = useCallback(async (sec: number) => {
+    const a = audioRef.current;
+    if (!a) return;
+    a.currentTime = sec;
+    setPositionSec(sec);
+    await socketSeek(Math.max(0, sec - 0.5), sec);
+  }, []);
+
+  const handleNext = useCallback(async () => {
+    await socketEnd();
+    const nextSong = queue.next();
+    if (!nextSong) {
+      setPlaying(false);
+      await socketDisconnect();
+    }
+  }, [queue]);
+
+  const handlePrev = useCallback(async () => {
+    queue.prev();
+  }, [queue]);
+
+  // Update buffered count every second
+  useEffect(() => {
+    const id = setInterval(() => { bufferedRef.current = getBufferedTickCount(); }, 1_000);
+    return () => clearInterval(id);
+  }, []);
+
+  // When the song ends naturally, advance the queue
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    function onEnded() { void handleNext(); }
+    a.addEventListener('ended', onEnded);
+    return () => a.removeEventListener('ended', onEnded);
+  }, [handleNext]);
 
   return (
-    <motion.div
-      initial={false}
-      animate={state.paymentActive ? { boxShadow: '0 0 0 2px hsl(142 100% 60% / 0.6), 0 0 40px hsl(142 100% 60% / 0.3)' } : { boxShadow: '0 -8px 32px rgba(0,0,0,0.4)' }}
-      transition={{ duration: 0.3 }}
-      className="fixed bottom-0 left-0 right-0 z-40 border-t border-border glass-strong"
-    >
-      <div className="flex h-20 items-center gap-4 px-4 md:px-6">
-        {/* Left — cover + title */}
-        <div className="flex items-center gap-3 w-1/3 min-w-0">
-          <div
-            className={cn(
-              'h-12 w-12 shrink-0 rounded-lg bg-bg-muted overflow-hidden flex items-center justify-center',
-              state.paymentActive && 'neon-ring',
-            )}
-          >
-            {state.coverUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={state.coverUrl} alt="" className="h-full w-full object-cover" />
-            ) : (
-              <span className="text-fg-muted text-xs">♪</span>
-            )}
-          </div>
-          <div className="min-w-0">
-            <div className="truncate text-sm font-medium">{state.title}</div>
-            <div className="truncate text-xs text-fg-muted">{state.artist}</div>
-          </div>
-        </div>
-
-        {/* Center — controls + seek */}
-        <div className="flex flex-1 flex-col items-center gap-1">
-          <div className="flex items-center gap-3">
-            <button
-              disabled={isEmpty}
-              className="rounded-full p-1.5 text-fg-muted hover:text-fg disabled:opacity-30 disabled:hover:text-fg-muted transition"
-              aria-label="Previous"
-            >
-              <SkipBack className="h-4 w-4" />
-            </button>
-            <button
-              disabled={isEmpty}
-              onClick={() => setState((p) => ({ ...p, playing: !p.playing }))}
-              className={cn(
-                'flex h-9 w-9 items-center justify-center rounded-full transition',
-                isEmpty
-                  ? 'bg-bg-muted text-fg-muted'
-                  : 'bg-white text-bg hover:scale-105',
-              )}
-              aria-label={state.playing ? 'Pause' : 'Play'}
-            >
-              {state.playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4 ml-0.5" />}
-            </button>
-            <button
-              disabled={isEmpty}
-              className="rounded-full p-1.5 text-fg-muted hover:text-fg disabled:opacity-30 disabled:hover:text-fg-muted transition"
-              aria-label="Next"
-            >
-              <SkipForward className="h-4 w-4" />
-            </button>
-          </div>
-          <div className="flex w-full max-w-md items-center gap-2">
-            <span className="text-[10px] tabular-nums text-fg-muted">
-              {formatTime(state.positionSec)}
-            </span>
-            <div className="relative h-1 flex-1 rounded-full bg-bg-muted">
-              <div
-                className={cn(
-                  'absolute inset-y-0 left-0 rounded-full bg-fg-muted transition-all',
-                  state.paymentActive && 'bg-accent',
-                )}
-                style={{ width: `${progress}%` }}
-              />
-              {/* Threshold marker (25%) — shows when payment triggers */}
-              {!isEmpty && (
-                <div className="absolute inset-y-0 w-px bg-accent/60" style={{ left: '25%' }} />
+    <>
+      <audio ref={audioRef} preload="metadata" muted={muted} />
+      <div
+        className={cn(
+          'pointer-events-auto fixed inset-x-0 bottom-0 z-30 border-t border-border bg-bg/95 backdrop-blur-xl',
+          track.songId ? 'opacity-100' : 'pointer-events-none opacity-50',
+        )}
+      >
+        <div className="mx-auto flex max-w-[1400px] items-center gap-3 px-4 py-2">
+          <div className="flex w-64 items-center gap-3 min-w-0">
+            <div className="h-12 w-12 flex-shrink-0 overflow-hidden rounded-md bg-bg-muted">
+              {track.coverUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={track.coverUrl} alt={track.title} className="h-full w-full object-cover" />
+              ) : (
+                <div className="grid h-full w-full place-items-center text-fg-muted text-xs">♪</div>
               )}
             </div>
-            <span className="text-[10px] tabular-nums text-fg-muted">
-              {formatTime(state.durationSec)}
-            </span>
+            <div className="min-w-0 flex-1">
+              <Link href={track.songId ? `/song/${track.songId}` : '#'} className="block truncate text-sm font-medium hover:underline">
+                {track.title}
+              </Link>
+              <div className="truncate text-xs text-fg-muted">{track.artist}</div>
+            </div>
           </div>
-        </div>
 
-        {/* Right — volume + price + payment indicator */}
-        <div className="hidden md:flex w-1/3 items-center justify-end gap-4">
-          <div
-            className={cn(
-              'flex items-center gap-2 rounded-full px-3 py-1 text-xs transition',
-              state.paymentActive
-                ? 'bg-accent/20 text-accent neon-ring'
-                : 'bg-bg-elevated text-fg-muted',
-            )}
-            title="Price per stream"
-          >
-            <Zap className="h-3 w-3" />
-            <span className="tabular-nums">{state.pricePerStream} USDC</span>
+          {/* Center: controls + waveform */}
+          <div className="flex flex-1 flex-col gap-1">
+            <div className="flex items-center justify-center gap-2">
+              <button
+                onClick={() => queue.toggleShuffle()}
+                aria-label="Shuffle"
+                className={cn(
+                  'rounded-md p-1.5 text-fg-muted transition hover:text-fg',
+                  queue.shuffle && 'text-accent',
+                )}
+                title={queue.shuffle ? 'Shuffle on' : 'Shuffle off'}
+              >
+                <Shuffle className="h-3.5 w-3.5" />
+              </button>
+              <button onClick={handlePrev} aria-label="Previous" className="rounded-md p-1.5 text-fg hover:bg-bg-muted">
+                <SkipBack className="h-4 w-4" />
+              </button>
+              <button
+                onClick={togglePlay}
+                disabled={!track.songId}
+                aria-label={playing ? 'Pause' : 'Play'}
+                className={cn(
+                  'grid h-9 w-9 place-items-center rounded-full transition',
+                  playing
+                    ? 'bg-accent text-bg hover:bg-accent/90'
+                    : 'bg-bg-muted text-fg hover:bg-fg/10',
+                )}
+              >
+                {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4 translate-x-0.5" />}
+              </button>
+              <button onClick={handleNext} aria-label="Next" className="rounded-md p-1.5 text-fg hover:bg-bg-muted">
+                <SkipForward className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => queue.cycleRepeat()}
+                aria-label="Repeat"
+                className={cn(
+                  'rounded-md p-1.5 text-fg-muted transition hover:text-fg',
+                  queue.repeat !== 'off' && 'text-accent',
+                )}
+                title={`Repeat: ${queue.repeat}`}
+              >
+                {queue.repeat === 'one' ? <Repeat1 className="h-3.5 w-3.5" /> : <Repeat className="h-3.5 w-3.5" />}
+              </button>
+            </div>
+
+            {/* Waveform with payment trigger marker */}
+            <WaveformProgress
+              peaks={track.waveformPeaks}
+              durationSec={track.durationSec}
+              positionSec={positionSec}
+              onSeek={track.songId ? handleSeek : undefined}
+              thresholdReached={thresholdReached}
+              compact
+            />
           </div>
-          <button className="text-fg-muted hover:text-fg transition" aria-label="Volume">
-            <Volume2 className="h-4 w-4" />
-          </button>
-          {!isEmpty && state.songId && (
-            <Link
-              href={`/song/${state.songId}`}
-              className="rounded-full border border-border px-3 py-1 text-xs text-fg-muted hover:text-fg hover:border-fg-muted transition"
+
+          {/* Right: volume + price */}
+          <div className="flex w-44 items-center justify-end gap-3">
+            {paymentDuePending && (
+              <span className="inline-flex items-center gap-1 rounded-md bg-accent/15 px-2 py-0.5 text-[11px] text-accent border border-accent/30">
+                <span className="relative flex h-1.5 w-1.5">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent/60" />
+                  <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-accent" />
+                </span>
+                Pay {paymentDuePending.amount}
+              </span>
+            )}
+            {paymentSettledFlash && (
+              <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-2 py-0.5 text-[11px] text-emerald-400 border border-emerald-400/30">
+                ✓ paid
+              </span>
+            )}
+            <span className="text-[11px] tabular-nums text-fg-muted">
+              {Math.floor(positionSec / 60)}:{(Math.floor(positionSec % 60)).toString().padStart(2, '0')} / {Math.floor(track.durationSec / 60)}:{(Math.floor(track.durationSec % 60)).toString().padStart(2, '0')}
+            </span>
+            <button
+              onClick={() => { const a = audioRef.current; if (a) { a.muted = !a.muted; setMuted(a.muted); } }}
+              aria-label="Mute"
+              className="rounded-md p-1.5 text-fg-muted hover:text-fg"
             >
-              Open
-            </Link>
-          )}
+              <Volume2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
       </div>
-    </motion.div>
-  );
-}
 
-function formatTime(sec: number): string {
-  if (!Number.isFinite(sec) || sec < 0) return '0:00';
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
+      {/* Floating position badge when payment is due */}
+      <AnimatePresence>
+        {paymentDuePending && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 10 }}
+            className="fixed bottom-24 left-1/2 z-40 -translate-x-1/2 rounded-2xl border border-accent/40 bg-bg/95 px-4 py-2 shadow-2xl backdrop-blur"
+          >
+            <div className="flex items-center gap-2 text-sm">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent/70" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
+              </span>
+              Payment due: {paymentDuePending.amount} USDC
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
+  );
 }

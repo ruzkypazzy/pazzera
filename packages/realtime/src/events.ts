@@ -1,101 +1,87 @@
 /**
- * Typed Socket.IO event schemas.
+ * Phase 8 — Typed Socket.IO event schemas (server + client).
  *
- * The server is the source of truth. Clients only echo position/pause/play.
+ * Contract (Pazzera realtime protocol v3):
+ *
+ *   Client emits:
+ *     playback:start     — first connect after pressing play
+ *     playback:tick      — every 5s
+ *     playback:pause
+ *     playback:resume
+ *     playback:seek
+ *     playback:end
+ *
+ *   Server emits:
+ *     joined
+ *     threshold_crossed
+ *     payment_due        — Fan Agent says charge this, sign & return
+ *     payment_settled    — facilitator confirmed on-chain
+ *     payment_failed
+ *     disconnected
+ *     error
+ *
+ *   Rooms:
+ *     stream:<streamId>     — the listener + the system (payment_fanout side)
+ *     admin                 — admin dashboard subscribers (read-only)
  */
 
+import type {
+  PlaybackTickPayload,
+  PaymentDuePayload,
+  PaymentSettledPayload,
+  PaymentFailedPayload,
+  ThresholdCrossedPayload,
+  StreamStartPayload,
+  StreamEndPayload,
+  StreamSeekPayload,
+  StreamPausePayload,
+  StreamResumePayload,
+  StreamResumeAckPayload,
+  ErrorPayload,
+  ServerTickAckPayload,
+} from './protocol';
+
 export interface ClientToServerEvents {
-  /** Join a stream room; ticket was issued by /api/streams/start. */
-  'stream:join': (payload: { streamId: string; ticket: string }) => void;
-  'stream:leave': (payload: { streamId: string }) => void;
-
-  /** Playback tick (every 5s from the client). */
-  'stream:position': (payload: {
+  'playback:start': (payload: StreamStartPayload, ack?: (r: StreamResumeAckPayload) => void) => void;
+  'playback:tick': (payload: PlaybackTickPayload, ack?: (r: ServerTickAckPayload) => void) => void;
+  'playback:pause': (payload: StreamPausePayload) => void;
+  'playback:resume': (payload: StreamResumePayload) => void;
+  'playback:seek': (payload: StreamSeekPayload) => void;
+  'playback:end': (payload: StreamEndPayload) => void;
+  /** After reconnect — sends any client-buffered ticks that haven't reached the server. */
+  'playback:flush_buffer': (payload: {
     streamId: string;
-    positionSec: number;
-    monotonicMs: number;
-  }) => void;
-
-  /** Client reports a seek. */
-  'stream:seek': (payload: {
-    streamId: string;
-    fromSec: number;
-    toSec: number;
-  }) => void;
-
-  /** Client reports pause/resume. */
-  'stream:pause': (payload: { streamId: string; monotonicMs: number }) => void;
-  'stream:resume': (payload: { streamId: string; monotonicMs: number }) => void;
-
-  /** Stream finished naturally. */
-  'stream:end': (payload: { streamId: string; monotonicMs: number }) => void;
-
-  /** EIP-712 signature delivered for the due payment. */
-  'stream:payment_signed': (payload: {
-    streamId: string;
-    authorization: {
-      from: string;
-      to: string;
-      value: string;
-      validAfter: string;
-      validBefore: string;
-      nonce: string;
-      v: number;
-      r: string;
-      s: string;
-    };
+    sessionToken: string;
+    ticks: PlaybackTickPayload[];
   }) => void;
 }
 
 export interface ServerToClientEvents {
-  'stream:joined': (payload: {
-    streamId: string;
-    thresholdSec: number;
-    serverTime: number;
-  }) => void;
-
-  'stream:error': (payload: {
-    streamId: string;
-    code: string;
-    message: string;
-  }) => void;
-
-  /** Server says: payment is due, please sign. */
-  'stream:payment_due': (payload: {
-    streamId: string;
-    songId: string;
-    amountUsdc: string;
-    recipient: string;
-    nonce: string;
-    validAfter: string;
-    validBefore: string;
-  }) => void;
-
-  /** Payment was settled on-chain. */
-  'stream:payment_settled': (payload: {
-    streamId: string;
-    paymentId: string;
-    txHash: string;
-  }) => void;
-
-  /** Payout distribution done. */
-  'stream:payout_done': (payload: {
-    streamId: string;
-    paymentId: string;
-    totalDistributed: string;
-    recipients: { username: string; amount: string }[];
-  }) => void;
-
-  /** Heartbeat ack. */
-  'stream:tick_ack': (payload: { streamId: string; monotonicMs: number }) => void;
+  joined: (payload: { streamId: string; thresholdSec: number; serverTime: number }) => void;
+  threshold_crossed: (payload: ThresholdCrossedPayload) => void;
+  payment_due: (payload: PaymentDuePayload) => void;
+  payment_settled: (payload: PaymentSettledPayload) => void;
+  payment_failed: (payload: PaymentFailedPayload) => void;
+  disconnected: (payload: { streamId: string; reason: 'rate_limited' | 'invalid_payloads' | 'timeout' | 'server_shutdown' }) => void;
+  error: (payload: ErrorPayload) => void;
+  ack_tick: (payload: ServerTickAckPayload) => void;
 }
 
 export interface InterServerEvents {
-  // Reserved for scaling to multiple Socket.IO nodes with the Redis adapter.
-  'admin:broadcast': (payload: { type: string; data: unknown }) => void;
+  // Redis adapter pads for horizontal scaling (Phase 11). Currently unused.
+  ping: () => void;
 }
 
 export interface SocketData {
   userId?: string;
-  activeStreamId?: string;
+  isAdmin?: boolean;
+  streamId?: string;
+  /** Used for disconnect-rate tracking. */
+  connectedAt?: number;
+  /** Per-socket invalid payload counter for the rate-limiter. */
+  invalidPayloads?: number;
+  /** ISO most-recent tick timestamp. */
+  lastTickAt?: number;
 }
+
+export type { PlaybackTickPayload } from './protocol';

@@ -341,7 +341,6 @@ model Stream {
   song            Song      @relation(fields: [songId], references: [id])
 
   startedAt       DateTime  @default(now())
-  endedAt         DateTime?
   endReason       String?   // see StreamEndReason
   totalActiveMs   Int       @default(0)
 
@@ -360,9 +359,6 @@ model Stream {
   listenDurationSec Int?     // seconds the page was visible + audio playing + not muted
   mutedDurationSec  Int?
   hiddenDurationSec Int?
-  seekCount         Int?     // total seek events
-  loopCount         Int?     // total loop re-entries
-  maxPlaybackRate   Float?   // 1.0 = normal, 2.0 = 2x speed
   paymentTriggered  Boolean  @default(false)
   paymentTriggerSec Int?     // monotonicMs/1000 when payment was charged
   // Fan decision log id (FK to AgentDecisionLog)
@@ -373,15 +369,32 @@ model Stream {
   userAgent       String?
   deviceFingerprintId String?
 
+  // Phase 8 — realtime stream lifecycle
+  endedAt         DateTime?
+  endedReason     String?   // 'natural' | 'skipped' | 'paused' | 'timeout' | 'flagged' | 'payment_failed'
+  effectiveDurationMs Int @default(0)   // server-tracked, excludes muted/hidden abuse
+  loopCount       Int       @default(0)
+  seekCount       Int       @default(0)
+  maxPlaybackRate Float?    // peak observed rate
+  thresholdCrossed Boolean @default(false)
+  lastClientTimestampMs BigInt?
+  // Session token so client reconnect can resume the same stream
+  sessionToken    String?   @unique
+
   ticks           PlaybackTick[]
   payment         Payment?
   manualReviewRow ManualReview?
+  nonces          PaymentNonce[]
+
+  // Phase 8 admin observability — linked events
 
   @@index([userId, startedAt(sort: Desc)])
   @@index([songId, startedAt(sort: Desc)])
   @@index([fraudScore(sort: Desc)])                          // admin dashboards
   @@index([manualReview, startedAt(sort: Desc)])
   @@index([charged, startedAt])
+  @@index([sessionToken])
+  @@index([endedAt])
 }
 
 model PlaybackTick {
@@ -443,6 +456,47 @@ model FraudEvent {
 //   Status:  pending → signed → submitted → confirmed
 //                     └──── failed ←──┘
 //                              └→ reversed
+
+// Phase 8 — Cryptographic nonces used to defeat double-spend/replay attacks on
+// the x402 payment_due -> payment_settled round-trip. A nonce is bound to a
+// (streamId, userId) pair and is single-use. Postgres is the source of truth
+// (Redis is the hot cache). TTL 600s via @pazzera/realtime/nonce-store.
+model PaymentNonce {
+  id          String    @id @default(cuid())
+  nonce       String    @unique
+  streamId    String
+  stream      Stream    @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  userId      String
+  amountUsdc  String
+  usedAt      DateTime?
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
+
+  @@index([streamId])
+  @@index([userId, expiresAt])
+}
+
+// Phase 8 — Append-only log of payment_due / payment_settled events emitted
+// over Socket.IO. Powers the admin streaming-health dashboard's per-minute
+// counters, decoupling observability from socket transport state.
+model PaymentEvent {
+  id          String   @id @default(cuid())
+  kind        String   // 'payment_due' | 'payment_settled' | 'stream_start' | 'stream_end' | 'socket_disconnect'
+  streamId    String?
+  paymentId   String?
+  songId      String?
+  userId      String?
+  amountUsdc  String?
+  severity    Int      @default(0) // 0=info, 25=warn, 50=critical
+  meta        Json?
+  createdAt   DateTime @default(now())
+
+  @@index([kind, createdAt(sort: Desc)])
+  @@index([streamId])
+  @@index([paymentId])
+  @@index([severity, createdAt(sort: Desc)])
+}
+
 model WalletTransaction {
   id                  String   @id @default(cuid())
   walletId            String

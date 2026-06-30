@@ -123,7 +123,7 @@ export async function runFanWorker() {
             classification: decision.classification,
             fraudScore: decision.fraudScore,
             flaggedAbuse: decision.fraudScore >= 50,
-            fraudSignals: decision.signals as object,
+            fraudSignals: JSON.parse(JSON.stringify(decision.signals)),
             manualReview: decision.classification === 'fraudulent_stream' || decision.classification === 'suspicious_stream',
             manualReviewReason: decision.classification === 'fraudulent_stream' ? 'Fraud Sentinel agent flagged as fraudulent' : 'Fan Agent low trust',
             listenDurationSec: input.listenDurationSec,
@@ -145,12 +145,12 @@ export async function runFanWorker() {
               songId: input.songId,
               subjectUserId: input.userId,
               fraudScore: decision.fraudScore,
-              fraudSignals: decision.signals as object,
+              fraudSignals: JSON.parse(JSON.stringify(decision.signals)),
               status: 'pending',
             },
             update: {
               fraudScore: decision.fraudScore,
-              fraudSignals: decision.signals as object,
+              fraudSignals: JSON.parse(JSON.stringify(decision.signals)),
             },
           });
         }
@@ -167,6 +167,43 @@ export async function runFanWorker() {
           latencyMs: Date.now() - started,
           crossLinks: { streamId, songId: input.songId, userId: input.userId },
         });
+
+        // Phase 8 — when Fan Agent says shouldCharge, fire payment_due over Socket.IO.
+        // The realtime server also writes a PaymentNonce + PaymentEvent row; idempotency
+        // is enforced by the consumeNonce() check on settlement.
+        if (decision.shouldCharge) {
+          try {
+            const { emitPaymentDue, issueAndStoreNonce } = await import('@pazzera/realtime');
+            const song = await prisma.song.findUnique({
+              where: { id: input.songId },
+              select: { publishedPriceUsdc: true },
+            });
+            const amountUsdc = song?.publishedPriceUsdc ?? decision.signals.suggestedPriceUsdc ?? '0.003';
+            const tier = ((['0.001', '0.002', '0.003', '0.004', '0.005'] as const).find((t) => Number.parseFloat(t) === Number.parseFloat(amountUsdc)) ?? '0.003') as '0.001' | '0.002' | '0.003' | '0.004' | '0.005';
+            const nonce = await issueAndStoreNonce({ streamId, userId: input.userId, amountUsdc });
+            await emitPaymentDue({
+              streamId,
+              songId: input.songId,
+              amountUsdc,
+              pricingTier: tier,
+              authorizationRequired: true,
+              nonce,
+            });
+            await prisma.paymentEvent.create({
+              data: {
+                kind: 'payment_due',
+                streamId,
+                songId: input.songId,
+                userId: input.userId,
+                amountUsdc,
+                severity: 0,
+                meta: { nonce, classification: decision.classification },
+              },
+            }).catch(() => undefined);
+          } catch (err) {
+            logger.warn({ err }, 'fan:payment_due_emit_failed');
+          }
+        }
 
         await tracker.success(Date.now() - started);
         logger.info({ streamId, classification: decision.classification, fraudScore: decision.fraudScore }, 'fan:done');
