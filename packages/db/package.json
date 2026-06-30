@@ -16,6 +16,7 @@
     "push": "prisma db push",
     "seed": "tsx prisma/seed.ts",
     "seed:demo": "tsx prisma/demo-seed.ts",
+    "seed:agent-demo": "tsx prisma/agent-demo-seed.ts",
     "studio": "prisma studio",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

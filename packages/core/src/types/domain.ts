@@ -52,15 +52,21 @@ export interface RoyaltyRecipient {
 }
 
 export interface CuratorDecision {
-  decision: 'approved' | 'rejected' | 'needs_changes';
-  publishedPriceUsdc: string;
+  decision: 'approved' | 'rejected' | 'needs_changes' | 'manual_review';
+  score: number;                       // 0–100 normalized (Phase 7 contract)
+  suggestedPriceUsdc: number;          // number, not string (cleaner for UI; stringified at the persistence boundary)
+  confidenceScore: number;             // 0–100; higher = stronger signals
   reasons: string[];
-  metadata: {
-    metadataScore: number;
-    audioQualityScore: number;
-    spamScore: number;
-    duplicateOfSongId: string | null;
+  categoryScores: {
+    metadata: number;       // 0–20
+    audioQuality: number;   // 0–20
+    loudness: number;       // 0–20 (Phase 7 — EBU R128)
+    artwork: number;        // 0–20 (Phase 7)
+    duplicateRisk: number;  // 0–20 (inverted; 20 = clearly unique)
+    spamRisk: number;       // 0–20 (inverted; 20 = clearly legitimate)
+    marketability: number;  // 0–20 (engagement prediction)
   };
+  rawMetrics: Record<string, number | string | boolean | null>;
 }
 
 export interface StreamSession {
@@ -93,4 +99,68 @@ export interface PayoutReceipt {
   txHash: string | null;
   status: 'pending' | 'sent' | 'failed';
   createdAt: string;
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Phase 7 — Agent decision wire types
+// ════════════════════════════════════════════════════════════════════
+
+/** What Fan Agent decides per stream (Phase 7). */
+export interface FanDecision {
+  classification: 'valid_stream' | 'partial_stream' | 'suspicious_stream' | 'fraudulent_stream';
+  /** 0–100 fraud score (0 = clean, 100 = definite fraud). */
+  fraudScore: number;
+  /** Should we trigger the payment at thresholdSec? */
+  shouldCharge: boolean;
+  /** When (in seconds from stream start) the payment should fire, if shouldCharge. */
+  paymentTriggerSec?: number;
+  /** Human-readable reasons; UI shows them in the AI Explainability card. */
+  reasons: string[];
+  /** Numeric breakdown used for tooltips + admin. */
+  signals: Record<string, number>;
+}
+
+/** What Split Agent decides per settled payment. */
+export interface SplitDecision {
+  totalAmountUsdc: string;
+  splits: Array<{
+    username: string;
+    role: string;
+    splitPercentageBps: number;
+    amountUsdc: string;
+    payoutStatus: 'pending' | 'processing' | 'completed' | 'partial_failure' | 'failed';
+    payoutId?: string;
+    txHash?: string | null;
+    failureReason?: string | null;
+  }>;
+  payoutStatus: 'pending' | 'processing' | 'completed' | 'partial_failure' | 'failed';
+  /** Aggregate payment-level reconciliation. */
+  reconciliation: {
+    splitsAttempted: number;
+    splitsCompleted: number;
+    splitsFailed: number;
+    amountSettled: string;
+    amountPending: string;
+  };
+  reasons: string[];
+}
+
+/** Per-bucket recommendation (for Discovery Agent). */
+export interface Recommendation {
+  songId: string;
+  score: number;
+  bucket: 'for_you' | 'trending' | 'rising_artists' | 'because_you_listened';
+  explanation: string; // e.g. "You completed 94% of similar afrobeat songs"
+  signals: Record<string, number>;
+}
+
+/** What Fraud Sentinel decides per pattern. */
+export interface FraudAlertPayload {
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  entityType: 'user' | 'wallet' | 'song' | 'payment_cluster' | 'ip_cluster';
+  entityId: string;
+  score: number;
+  reasons: string[];
+  metricBreakdown: Record<string, number>;
+  autoAction?: 'wallet_frozen' | 'payouts_paused' | 'account_locked';
 }

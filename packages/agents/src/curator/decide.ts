@@ -1,29 +1,38 @@
 /**
  * Curator Agent — pure decision function.
  *
- * Scoring model v3 — 7 dimensions, each 0–20, total 0–140 (normalized
- * to 0–100 for storage + UI):
+ * v3 scoring model (7 dimensions × 20 = 140 raw, normalized 0–100):
  *
  *   metadata       (0–20) — completeness of artist-submitted fields
- *   audioQuality   (0–20) — bitrate, sample rate, codec, channels, LUFS, peak
+ *   audioQuality   (0–20) — bitrate, sample rate, codec, channels, peak
  *   spam           (0–20) — inverted; 20 = clearly legitimate
  *   duplicate      (0–20) — inverted; 20 = clearly unique (binary + acoustic)
  *   market         (0–20) — engagement prediction (artist history, recipients)
  *   loudness       (0–20) — EBU R128 normalized, no clipping, no over-compression
  *   artwork        (0–20) — cover resolution, aspect ratio, square-ness
  *
+ * Phase 7: also emits `confidence` and `categoryScores` for the
+ * AI Explainability UI. Confidence is derived from the spread of the
+ * weakest dimension relative to the strongest; tighter spread = higher
+ * confidence.
+ *
+ * Decision:
+ *
+ *   normalized < 31                → rejected
+ *   duplicate === 0 || spam < 6    → rejected (terminal)
+ *   audio < 6 || loudness < 4      → needs_changes
+ *   normalized >= 31 but < 60      → manual_review (added Phase 7)
+ *   otherwise                      → approved (with priced band)
+ *
  * Pricing bands (after totalScore computed, normalized to 100):
  *
- *   totalScore <  31  → reject
- *   31 ≤ x <  51      → 0.001 USDC
- *   51 ≤ x <  71      → 0.002 USDC
- *   71 ≤ x <  86      → 0.003 USDC
- *   86 ≤ x <  96      → 0.004 USDC
- *   96 ≤ x ≤ 100      → 0.005 USDC
+ *   96 ≤ x ≤ 100    → 0.005 USDC
+ *   86 ≤ x <  96    → 0.004 USDC
+ *   71 ≤ x <  86    → 0.003 USDC
+ *   51 ≤ x <  71    → 0.002 USDC
+ *   31 ≤ x <  51    → 0.001 USDC
  *
- * The artist may request a higher price; the curator's published price
- * is the LOWER of (artist-requested, band-derived). Artist's pick is
- * a ceiling, never exceeded.
+ * The artist's requested price is a ceiling, never exceeded.
  */
 import type { CuratorDecision } from '@pazzera/core';
 
@@ -48,7 +57,7 @@ export interface CuratorInput {
     codec?: string;
     containerFormat?: string;
     silenceRatio?: number | null;
-    lufsIntegrated?: number | null; // -70 = silence
+    lufsIntegrated?: number | null;
     lufsRange?: number | null;
     truePeakDb?: number | null;
   };
@@ -59,9 +68,7 @@ export interface CuratorInput {
     flaggedForSpam: number;
   };
   duplicate: {
-    /** True if the binary hash matches another approved song. */
     binaryHashMatch: boolean;
-    /** True if the acoustic hash matches another approved song. */
     acousticHashMatch: boolean;
   };
   usernamesResolved: boolean;
@@ -74,29 +81,26 @@ export interface CuratorInput {
   };
 }
 
-export interface CuratorScore {
-  metadata: number;     // 0–20
-  audio: number;        // 0–20
-  spam: number;         // 0–20 (higher = better)
-  duplicate: number;    // 0–20 (higher = better)
-  market: number;       // 0–20
-  loudness: number;     // 0–20
-  artwork: number;      // 0–20
-  /** 0–140 (sum of dimensions) */
-  total: number;
-  /** 0–100 (normalized). */
-  normalized: number;
+export interface CuratorCategoryScores {
+  metadata: number;
+  audioQuality: number;
+  loudness: number;
+  artwork: number;
+  duplicateRisk: number;
+  spamRisk: number;
+  marketability: number;
 }
 
-export interface CuratorDecisionV3 {
-  decision: 'approved' | 'rejected' | 'needs_changes' | 'suspended';
-  publishedPriceUsdc: string;
-  priceBand: string;
-  scores: CuratorScore;
-  reasons: string[];
+export interface CuratorDecisionInternal extends CuratorDecision {
+  scoreBreakdown: CuratorCategoryScores & { totalRaw: number; normalized: number };
 }
 
 const REJECT_THRESHOLD = 31;
+const NEEDS_CHANGES_AUDIO_THRESHOLD = 6;
+const NEEDS_CHANGES_LOUDNESS_THRESHOLD = 4;
+const MANUAL_REVIEW_THRESHOLD = 60;
+const FRAUD_REJECT_THRESHOLD = 6;
+
 const PRICE_BANDS: Array<{ min: number; max: number; price: number }> = [
   { min: 96, max: 101, price: 0.005 },
   { min: 86, max: 96, price: 0.004 },
@@ -114,25 +118,59 @@ function priceForTotal(total: number): { price: number; band: string } {
   return band ? { price: band.price, band: band.price.toFixed(3) } : { price: 0, band: 'rejected' };
 }
 
-export function decideCurator(input: CuratorInput): CuratorDecisionV3 {
+/**
+ * Confidence — how strongly do all dimensions agree?
+ * A track with all dimensions clustered near the same value is more
+ * confident than one with one huge dimension and one weak one.
+ *
+ * Formula: 100 - stdev-as-percent-of-20. Lower spread = higher confidence.
+ * Then floor on terminal rejections (we're very confident something is bad).
+ */
+function confidenceForScores(scores: CuratorCategoryScores, decision: CuratorDecision['decision']): number {
+  const dims = Object.values(scores);
+  const mean = dims.reduce((s, n) => s + n, 0) / dims.length;
+  const variance = dims.reduce((s, n) => s + (n - mean) ** 2, 0) / dims.length;
+  const stdev = Math.sqrt(variance);
+  // stdev max ≈ 10 (0..20 range). Map stdev → penalty.
+  let confidence = Math.max(0, Math.min(100, Math.round(100 - stdev * 10)));
+  // Stronger floor for clear-cut cases
+  if (decision === 'rejected' || decision === 'approved') {
+    confidence = Math.max(confidence, 70);
+  }
+  return confidence;
+}
+
+export function decideCurator(input: CuratorInput): CuratorDecisionInternal {
   const reasons: string[] = [];
+  const rawMetrics: Record<string, number | string | boolean | null> = {};
 
   // ─── metadata (0–20) ────────────────────────────────────────
   let metadata = 0;
-  if (input.metadata.title.length >= 3 && input.metadata.title.length <= 80) metadata += 4;
-  else if (input.metadata.title.length > 80) {
+  if (input.metadata.title.length >= 3 && input.metadata.title.length <= 80) {
+    metadata += 4;
+  } else if (input.metadata.title.length > 80) {
     metadata += 1;
     reasons.push('Title unusually long');
   }
   if (input.metadata.artistName.length >= 2) metadata += 3;
   if (input.metadata.featuredNames.length > 0) metadata += 2;
   if (input.metadata.producerName) metadata += 2;
-  if (input.metadata.description && input.metadata.description.length >= 60) metadata += 3;
-  else if (input.metadata.description && input.metadata.description.length >= 20) metadata += 1;
-  else reasons.push('Description too short (<60 chars recommended)');
-  if (input.usernamesResolved) metadata += 4;
-  else reasons.push('One or more Pazzera usernames could not be resolved');
+  if (input.metadata.description && input.metadata.description.length >= 60) {
+    metadata += 3;
+  } else if (input.metadata.description && input.metadata.description.length >= 20) {
+    metadata += 1;
+  } else {
+    reasons.push('Description too short (<60 chars recommended)');
+  }
+  if (input.usernamesResolved) {
+    metadata += 4;
+  } else {
+    reasons.push('One or more Pazzera usernames could not be resolved');
+  }
   if (input.metadata.coverUrl) metadata += 2;
+
+  rawMetrics.metadataTitleLength = input.metadata.title.length;
+  rawMetrics.metadataFeaturedCount = input.metadata.featuredNames.length;
 
   // ─── audio quality (0–20) ─────────────────────────────────
   let audio = 0;
@@ -141,7 +179,6 @@ export function decideCurator(input: CuratorInput): CuratorDecisionV3 {
   else if (input.audioQuality.bitrateKbps >= 192) audio += 3;
   else if (input.audioQuality.bitrateKbps >= 128) audio += 2;
   else {
-    audio += 0;
     reasons.push('Audio bitrate below 128 kbps minimum');
   }
   if (input.audioQuality.sampleRateHz >= 48000) audio += 4;
@@ -167,30 +204,24 @@ export function decideCurator(input: CuratorInput): CuratorDecisionV3 {
       audio += 2;
     }
   }
+  rawMetrics.audioBitrateKbps = input.audioQuality.bitrateKbps;
+  rawMetrics.audioSampleRateHz = input.audioQuality.sampleRateHz;
+  rawMetrics.audioChannels = input.audioQuality.channels;
 
   // ─── loudness (0–20) — EBU R128 scoring ────────────────────
-  // Pazzera targets streaming-optimized -16 LUFS integrated with
-  // ≤ 11 LU range. Reward tracks in band; penalize extremes.
-  let loudness = 12; // neutral baseline
+  let loudness = 12;
   if (input.audioQuality.lufsIntegrated !== undefined && input.audioQuality.lufsIntegrated !== null) {
     const l = input.audioQuality.lufsIntegrated;
-    if (l >= -18 && l <= -13) {
-      // Sweet spot
-      loudness = 18;
-    } else if (l >= -23 && l <= -10) {
-      // Acceptable
-      loudness = 14;
-    } else if (l < -30) {
+    if (l >= -18 && l <= -13) loudness = 18;
+    else if (l >= -23 && l <= -10) loudness = 14;
+    else if (l < -30) {
       loudness = 6;
       reasons.push('Audio is very quiet (below -30 LUFS) — listener will need to crank volume');
     } else if (l > -8) {
       loudness = 4;
-      reasons.push('Audio is extremely loud (above -8 LUFS) — risk of clipping on consumer devices');
-    } else {
-      loudness = 9;
-    }
+      reasons.push('Audio is extremely loud (above -8 LUFS) — clipping risk on consumer devices');
+    } else loudness = 9;
   }
-  // Loudness range (dynamics) — > 18 LU = too dynamic, < 4 LU = over-compressed
   if (input.audioQuality.lufsRange !== undefined && input.audioQuality.lufsRange !== null) {
     const lr = input.audioQuality.lufsRange;
     if (lr > 18) {
@@ -203,13 +234,14 @@ export function decideCurator(input: CuratorInput): CuratorDecisionV3 {
       loudness += 2;
     }
   }
-  // True peak (digital clipping safety) — > -1 dBTP is bad
   if (input.audioQuality.truePeakDb !== undefined && input.audioQuality.truePeakDb !== null) {
     if (input.audioQuality.truePeakDb > -0.5) {
       loudness -= 3;
       reasons.push('True peak above -0.5 dBTP — intersample clipping risk');
     }
   }
+  rawMetrics.lufsIntegrated = input.audioQuality.lufsIntegrated ?? null;
+  rawMetrics.lufsRange = input.audioQuality.lufsRange ?? null;
 
   // ─── spam (0–20) ───────────────────────────────────────────
   let spam = 20;
@@ -241,22 +273,22 @@ export function decideCurator(input: CuratorInput): CuratorDecisionV3 {
     spam -= 4;
     reasons.push('More than 10 featured artists — likely abuse');
   }
+  rawMetrics.spamFlags = input.artistHistory.flaggedForSpam;
 
-  // ─── duplicate (0–20) — binary + acoustic ──────────────────
+  // ─── duplicate (0–20) ──────────────────────────────────────
   let duplicate = 20;
   if (input.duplicate.binaryHashMatch) {
     duplicate = 0;
     reasons.push('Exact duplicate: binary hash matches an existing song');
   } else if (input.duplicate.acousticHashMatch) {
     duplicate = 4;
-    reasons.push('Acoustic fingerprint matches an existing song — likely a re-encode of the same track');
-  } else if (input.artistHistory.totalSongs > 0) {
-    // Mild signal: same artist uploaded many same-length tracks
-    if (input.artistHistory.totalSongs > 10 && input.artistHistory.approvedSongs / input.artistHistory.totalSongs < 0.5) {
-      duplicate -= 3;
-      reasons.push('Many previous low-quality uploads from this artist');
-    }
+    reasons.push('Acoustic fingerprint matches an existing song — likely a re-encode');
+  } else if (input.artistHistory.totalSongs > 10 && input.artistHistory.approvedSongs / input.artistHistory.totalSongs < 0.5) {
+    duplicate -= 3;
+    reasons.push('Many previous low-quality uploads from this artist');
   }
+  rawMetrics.binaryDuplicate = input.duplicate.binaryHashMatch;
+  rawMetrics.acousticDuplicate = input.duplicate.acousticHashMatch;
 
   // ─── market (0–20) ─────────────────────────────────────────
   let market = 10;
@@ -270,76 +302,87 @@ export function decideCurator(input: CuratorInput): CuratorDecisionV3 {
 
   // ─── artwork (0–20) ────────────────────────────────────────
   let artwork = 10;
-  // Resolution
   const minSide = Math.min(input.artwork.widthPx, input.artwork.heightPx);
   if (minSide >= 1000) artwork += 5;
   else if (minSide >= 500) artwork += 3;
   else artwork -= 4;
-  // Square ratio (recommended for streaming)
   if (input.artwork.isSquare) artwork += 3;
   else if (input.artwork.aspectRatio >= 0.9 && input.artwork.aspectRatio <= 1.1) artwork += 1;
   else artwork -= 2;
+  rawMetrics.artworkMinPx = minSide;
 
   // ─── Clamp + total ──────────────────────────────────────────
-  const scores: CuratorScore = {
+  const categoryScores: CuratorCategoryScores = {
     metadata: clampInt(metadata, 0, 20),
-    audio: clampInt(audio, 0, 20),
-    spam: clampInt(spam, 0, 20),
-    duplicate: clampInt(duplicate, 0, 20),
-    market: clampInt(market, 0, 20),
+    audioQuality: clampInt(audio, 0, 20),
     loudness: clampInt(loudness, 0, 20),
     artwork: clampInt(artwork, 0, 20),
-    total: 0,
-    normalized: 0,
+    duplicateRisk: clampInt(duplicate, 0, 20),
+    spamRisk: clampInt(spam, 0, 20),
+    marketability: clampInt(market, 0, 20),
   };
-  scores.total =
-    scores.metadata +
-    scores.audio +
-    scores.spam +
-    scores.duplicate +
-    scores.market +
-    scores.loudness +
-    scores.artwork;
-  // Normalize 0–140 → 0–100
-  scores.normalized = Math.round((scores.total / 140) * 100);
+  const totalRaw =
+    categoryScores.metadata +
+    categoryScores.audioQuality +
+    categoryScores.loudness +
+    categoryScores.artwork +
+    categoryScores.duplicateRisk +
+    categoryScores.spamRisk +
+    categoryScores.marketability;
+  const normalized = Math.round((totalRaw / 140) * 100);
 
   // ─── Decision (use normalized) ──────────────────────────────
-  if (scores.normalized < REJECT_THRESHOLD) {
-    return {
-      decision: 'rejected',
-      publishedPriceUsdc: '0',
-      priceBand: 'rejected',
-      scores,
-      reasons: reasons.length ? reasons : ['Total score below acceptance threshold'],
-    };
-  }
-  if (scores.duplicate === 0) {
-    return { decision: 'rejected', publishedPriceUsdc: '0', priceBand: 'rejected', scores, reasons };
-  }
-  if (scores.spam < 6) {
-    return { decision: 'rejected', publishedPriceUsdc: '0', priceBand: 'rejected', scores, reasons };
-  }
-  if (scores.audio < 6) {
-    return { decision: 'needs_changes', publishedPriceUsdc: '0', priceBand: 'needs_changes', scores, reasons };
-  }
-  if (scores.loudness < 4) {
-    return { decision: 'needs_changes', publishedPriceUsdc: '0', priceBand: 'needs_changes', scores, reasons: [...reasons, 'Audio loudness is in the rejection band — please re-master'] };
+  let decision: CuratorDecision['decision'];
+  if (normalized < REJECT_THRESHOLD) {
+    decision = 'rejected';
+  } else if (categoryScores.duplicateRisk === 0) {
+    decision = 'rejected';
+  } else if (categoryScores.spamRisk < FRAUD_REJECT_THRESHOLD) {
+    decision = 'rejected';
+  } else if (categoryScores.audioQuality < NEEDS_CHANGES_AUDIO_THRESHOLD) {
+    decision = 'needs_changes';
+  } else if (categoryScores.loudness < NEEDS_CHANGES_LOUDNESS_THRESHOLD) {
+    decision = 'needs_changes';
+    reasons.push('Audio loudness is in the rejection band — please re-master');
+  } else if (normalized < MANUAL_REVIEW_THRESHOLD) {
+    decision = 'manual_review';
+    reasons.push(`Normalized score ${normalized}/100 below auto-approval threshold (60) — admin review required`);
+  } else {
+    decision = 'approved';
   }
 
-  // ─── Pricing ──────────────────────────────────────────────
-  const { price: bandPrice, band } = priceForTotal(scores.normalized);
-  const requested = Math.max(0.001, Math.min(0.005, input.artistRequestedPriceUsdc));
-  const published = Math.min(requested, bandPrice);
-
-  if (published < requested) {
-    reasons.push(`Price lowered from ${requested} to ${published.toFixed(3)} USDC — normalized score ${scores.normalized}/100 maps to band ${band}`);
+  // ─── Pricing (only if approved / manual_review positive) ───
+  let suggestedPriceUsdc = 0;
+  let band = 'rejected';
+  if (decision === 'approved') {
+    const p = priceForTotal(normalized);
+    const requested = Math.max(0.001, Math.min(0.005, input.artistRequestedPriceUsdc));
+    suggestedPriceUsdc = Math.min(requested, p.price);
+    band = p.band;
+    if (suggestedPriceUsdc < requested) {
+      reasons.push(`Price lowered from ${requested} to ${suggestedPriceUsdc.toFixed(3)} USDC — score ${normalized}/100 → band ${band}`);
+    }
+  } else if (decision === 'manual_review') {
+    suggestedPriceUsdc = 0;
+    band = 'manual_review';
+  } else if (decision === 'needs_changes') {
+    suggestedPriceUsdc = 0;
+    band = 'needs_changes';
+  } else {
+    suggestedPriceUsdc = 0;
+    band = 'rejected';
   }
+
+  const confidenceScore = confidenceForScores(categoryScores, decision);
 
   return {
-    decision: 'approved',
-    publishedPriceUsdc: published.toFixed(6),
-    priceBand: band,
-    scores,
-    reasons,
+    decision,
+    score: normalized,
+    suggestedPriceUsdc,
+    confidenceScore,
+    reasons: reasons.length ? reasons : ['Total score below acceptance threshold'],
+    categoryScores,
+    rawMetrics,
+    scoreBreakdown: { ...categoryScores, totalRaw, normalized },
   };
 }

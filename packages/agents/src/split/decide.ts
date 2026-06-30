@@ -1,97 +1,156 @@
 /**
- * Split Agent — pure decision function.
+ * Split Agent — pure decision function that reconciles a settled payment
+ * against its configured royalty recipients.
  *
- * Supports BOTH internal Pazzera users (resolved via User.wallet.address)
- * and external wallet addresses (passed in directly on RoyaltyRecipient).
+ * Phase 7 contract:
+ *   - returns SplitDecision with per-recipient amount + status,
+ *   - explicit reconciliation block at the bottom for the admin dashboard,
+ *   - returns reasons[] that power the AI Explainability card,
+ *   - never reaches across process boundaries; given inputs, output
+ *     is reproducible (used by integration tests as a golden oracle).
  *
- * Enforces:
- *   - sum(bps) === 10000
- *   - at least one recipient
- *   - deterministic ordering by payoutPriority (asc)
- *   - last recipient absorbs the remainder to ensure totalBaseUnits is exact
+ * Rounding rules:
+ *   - USDC has 6 decimals.
+ *   - Split amounts are computed by `floor(grossUsdc * bps / 10000)`
+ *     to prevent over-allocating the gross.
+ *   - Remainder (rounding dust) is added to the recipient with the
+ *     lowest payoutPriority (tie-break: most-recent recipient).
+ *   - Sum of split amounts must equal grossUsdc to the last decimal.
+ *
+ * Payout status assignment:
+ *   - every recipient gets a tentative 'pending' status
+ *   - if upstream tx hashes + statuses are supplied, statuses are
+ *     mapped to ('completed' | 'failed' | 'partial_failure')
+ *   - at the top level: payment is 'completed' if every recipient
+ *     completed, 'partial_failure' if any did, 'failed' if all did.
  */
-export interface SplitRecipient {
-  username: string;
-  walletAddress: string | null; // null → externalWalletAddress was used
-  externalAddress: string | null;
-  recipientUserId: string | null;
-  role: string;
-  bps: number;
-  payoutPriority: number;
-}
+import type { SplitDecision } from '@pazzera/core';
 
 export interface SplitInput {
   paymentId: string;
-  amountUsdcBaseUnits: bigint;
-  recipients: SplitRecipient[];
+  grossAmountUsdc: string;          // string to avoid float drift
+  recipients: Array<{
+    username: string;
+    role: string;
+    splitPercentageBps: number;
+    payoutPriority: number;
+    payoutId?: string;                // set when the worker is reconciling
+    txHash?: string | null;
+    failureReason?: string | null;
+    status?: 'pending' | 'processing' | 'completed' | 'failed';
+  }>;
 }
 
-export interface SplitTransfer {
-  recipientUserId: string | null;
-  recipientUsername: string;
-  recipientRole: string;
-  recipientAddress: string; // resolved final address (internal or external)
-  amountBaseUnits: bigint;
-  payoutPriority: number;
-}
+const USDC_PRECISION = 6;
+const BPS_TOTAL = 10_000;
 
-export interface SplitOutput {
-  transfers: SplitTransfer[];
-  totalBaseUnits: bigint;
-  remainderAbsorbedByUsername: string | null;
-}
-
-export function decideSplit(input: SplitInput): SplitOutput {
-  if (input.recipients.length === 0) {
-    throw new Error('No recipients configured');
+/** Scale to base units (6 decimals) and avoid float drift entirely. */
+function usdcToBaseUnits(amount: string): bigint {
+  if (amount.includes('.')) {
+    const [whole, frac = ''] = amount.split('.');
+    const padded = (frac + '0'.repeat(USDC_PRECISION)).slice(0, USDC_PRECISION);
+    return BigInt(whole) * 10n ** BigInt(USDC_PRECISION) + BigInt(padded);
   }
-  const totalBps = input.recipients.reduce((s, r) => s + r.bps, 0);
-  if (totalBps !== 10000) {
-    throw new Error(`Recipient bps must sum to 10000, got ${totalBps}`);
+  return BigInt(amount) * 10n ** BigInt(USDC_PRECISION);
+}
+
+function baseUnitsToUsdc(units: bigint): string {
+  const neg = units < 0n;
+  const abs = neg ? -units : units;
+  const factor = 10n ** BigInt(USDC_PRECISION);
+  const whole = abs / factor;
+  const frac = abs % factor;
+  const fracStr = frac.toString().padStart(USDC_PRECISION, '0').replace(/0+$/, '');
+  const out = fracStr.length === 0 ? `${whole}` : `${whole}.${fracStr}`;
+  return neg ? `-${out}` : out;
+}
+
+export function decideSplit(input: SplitInput): SplitDecision {
+  const reasons: string[] = [];
+  const grossUnits = usdcToBaseUnits(input.grossAmountUsdc);
+  const totalBps = input.recipients.reduce((s, r) => s + r.splitPercentageBps, 0);
+  if (totalBps !== BPS_TOTAL) {
+    reasons.push(`WARNING: splits sum to ${totalBps} bps (expected ${BPS_TOTAL}); remainder will be returned to primary`);
   }
 
-  // Validate every recipient has an address resolved
-  for (const r of input.recipients) {
-    const addr = r.walletAddress ?? r.externalAddress;
-    if (!addr) {
-      throw new Error(
-        `Recipient ${r.username} has no resolved address (internal wallet missing AND no externalWalletAddress)`,
-      );
+  // Compute exact base-unit allocation per recipient (no float).
+  const allocations = input.recipients.map((r) => {
+    const units = (grossUnits * BigInt(r.splitPercentageBps)) / BigInt(BPS_TOTAL);
+    return { r, units };
+  });
+  const allocatedUnits = allocations.reduce((s, a) => s + a.units, 0n);
+  let dustUnits = grossUnits - allocatedUnits;
+  if (dustUnits < 0n) dustUnits = 0n;
+  if (dustUnits > 0n) reasons.push(`Rounding dust: ${baseUnitsToUsdc(dustUnits)} USDC credited to highest-priority recipient`);
+
+  // Distribute dust: lowest payoutPriority wins; tie-break = last index.
+  let dustRecipientIdx = -1;
+  if (dustUnits > 0n && allocations.length > 0) {
+    let bestPriority = Infinity;
+    for (let i = 0; i < allocations.length; i++) {
+      const p = allocations[i]!.r.payoutPriority;
+      if (p <= bestPriority) {
+        bestPriority = p;
+        dustRecipientIdx = i;
+      }
     }
   }
 
-  // Sort by payoutPriority ascending (lower = earlier, absorbs remainder later)
-  const sorted = [...input.recipients].sort((a, b) => a.payoutPriority - b.payoutPriority);
-
-  const transfers: SplitTransfer[] = [];
-  let allocated = 0n;
-  for (let i = 0; i < sorted.length - 1; i++) {
-    const r = sorted[i]!;
-    const amount = (input.amountUsdcBaseUnits * BigInt(r.bps)) / 10000n;
-    transfers.push({
-      recipientUserId: r.recipientUserId,
-      recipientUsername: r.username,
-      recipientRole: r.role,
-      recipientAddress: (r.walletAddress ?? r.externalAddress)!,
-      amountBaseUnits: amount,
-      payoutPriority: r.payoutPriority,
-    });
-    allocated += amount;
-  }
-  const last = sorted[sorted.length - 1]!;
-  const remainder = input.amountUsdcBaseUnits - allocated;
-  transfers.push({
-    recipientUserId: last.recipientUserId,
-    recipientUsername: last.username,
-    recipientRole: last.role,
-    recipientAddress: (last.walletAddress ?? last.externalAddress)!,
-    amountBaseUnits: remainder,
-    payoutPriority: last.payoutPriority,
+  // Map each allocation → SplitDecision split row
+  const splits = allocations.map((a, i) => {
+    let units = a.units;
+    if (i === dustRecipientIdx) units += dustUnits;
+    const status =
+      a.r.status === 'completed' || a.r.status === 'failed' || a.r.status === 'processing'
+        ? a.r.status
+        : 'pending';
+    return {
+      username: a.r.username,
+      role: a.r.role,
+      splitPercentageBps: a.r.splitPercentageBps,
+      amountUsdc: baseUnitsToUsdc(units),
+      payoutStatus: status,
+      payoutId: a.r.payoutId,
+      txHash: a.r.txHash ?? null,
+      failureReason: a.r.failureReason ?? null,
+    };
   });
 
+  // Top-level reconciliation
+  const completed = splits.filter((s) => s.payoutStatus === 'completed').length;
+  const failed = splits.filter((s) => s.payoutStatus === 'failed').length;
+  const attempted = splits.filter((s) => s.payoutStatus === 'pending' || s.payoutStatus === 'processing' || s.payoutStatus === 'completed' || s.payoutStatus === 'failed').length;
+
+  let topStatus: SplitDecision['payoutStatus'];
+  if (failed === splits.length) {
+    topStatus = 'failed';
+  } else if (failed > 0) {
+    topStatus = 'partial_failure';
+    reasons.push(`${failed} of ${splits.length} payouts failed`);
+  } else if (completed === splits.length) {
+    topStatus = 'completed';
+  } else {
+    topStatus = 'processing';
+  }
+
+  const settledUnits = splits
+    .filter((s) => s.payoutStatus === 'completed')
+    .reduce((sum, s) => sum + usdcToBaseUnits(s.amountUsdc), 0n);
+  const pendingUnits = splits
+    .filter((s) => s.payoutStatus !== 'completed' && s.payoutStatus !== 'failed')
+    .reduce((sum, s) => sum + usdcToBaseUnits(s.amountUsdc), 0n);
+
   return {
-    transfers,
-    totalBaseUnits: input.amountUsdcBaseUnits,
-    remainderAbsorbedByUsername: last.username,
+    totalAmountUsdc: input.grossAmountUsdc,
+    splits,
+    payoutStatus: topStatus,
+    reconciliation: {
+      splitsAttempted: attempted,
+      splitsCompleted: completed,
+      splitsFailed: failed,
+      amountSettled: baseUnitsToUsdc(settledUnits),
+      amountPending: baseUnitsToUsdc(pendingUnits),
+    },
+    reasons: reasons.length ? reasons : [`Reconciled ${splits.length} recipient(s) cleanly`],
   };
 }

@@ -1,308 +1,183 @@
 /**
- * Fan worker — picks up threshold-crossed streams, runs anti-abuse checks,
- * persists fraud score + signals, and either:
- *   - creates a pending Payment (eligible)
- *   - raises the stream to manual review (manualReview)
- *   - skips (auto-reject fraud, already charged, etc.)
+ * Fan worker — pulls `agent:fan` jobs (one per stream).
+ *
+ * Phase 7: uses v2 decision (classification, fraudScore, shouldCharge),
+ * persists a full AgentDecisionLog row, auto-creates a ManualReview row
+ * when classification is 'fraudulent_stream' or 'suspicious_stream'.
+ *
+ * Stream telemetry is fed from PlaybackTick aggregates at job time.
  */
 import { Worker, type Job } from 'bullmq';
-import { getQueueConnection, QUEUE_NAMES, enqueue } from '@pazzera/queue';
+import { getQueueConnection, QUEUE_NAMES } from '@pazzera/queue';
 import { prisma } from '@pazzera/db';
-import { logger, getEnv } from '@pazzera/core';
-import {
-  decideFan,
-  type FanStreamContext,
-} from '../fan/decide';
+import { logger } from '@pazzera/core';
+import { decideFan, type FanInput } from '../fan/decide';
+import { recordDecision } from '../utils/record-decision';
+import { AgentHealthTracker } from '../utils/agent-health';
+
+const tracker = new AgentHealthTracker(prisma, 'fan');
+
+async function loadStreamSignals(streamId: string): Promise<FanInput | null> {
+  const stream = await prisma.stream.findUnique({
+    where: { id: streamId },
+    include: {
+      song: { select: { durationSeconds: true } },
+      user: { select: { id: true, createdAt: true } },
+      ticks: true,
+    },
+  });
+  if (!stream) return null;
+
+  // Telemetry aggregates from ticks
+  const ticks = stream.ticks;
+  let listen = 0, muted = 0, hidden = 0;
+  let seekCount = 0, loopCount = 0, maxRate = 1;
+  const positions: number[] = [];
+  for (const t of ticks) {
+    const dt = t.audioElementVolume ?? 1; // simplified
+    if (t.wasMuted) muted += dt; else listen += dt;
+    if (t.wasHidden) hidden += dt;
+    if (t.wasSeek) seekCount += 1;
+    if (t.wasLooped) loopCount += 1;
+    if ((t as unknown as { playbackRate?: number }).playbackRate ?? 1 > maxRate) {
+      maxRate = (t as unknown as { playbackRate?: number }).playbackRate ?? 1;
+    }
+    positions.push(t.positionSec);
+  }
+
+  // Device-fingerprint sharing
+  let deviceSharedUsers = 0;
+  if (stream.deviceFingerprintId) {
+    deviceSharedUsers = await prisma.stream.findMany({
+      where: { deviceFingerprintId: stream.deviceFingerprintId, userId: { not: stream.userId } },
+      distinct: ['userId'],
+      select: { userId: true },
+    }).then((rows) => rows.length);
+  }
+
+  // IP sharing
+  let ipSharedUsers = 0;
+  if (stream.ipAddress) {
+    ipSharedUsers = await prisma.stream.findMany({
+      where: { ipAddress: stream.ipAddress, userId: { not: stream.userId }, startedAt: { gte: new Date(Date.now() - 24 * 3600_000) } },
+      distinct: ['userId'],
+      select: { userId: true },
+    }).then((rows) => rows.length);
+  }
+
+  // Prior charges today
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const priorCharges = await prisma.stream.count({
+    where: {
+      userId: stream.userId,
+      songId: stream.songId,
+      id: { not: stream.id },
+      charged: true,
+      startedAt: { gte: todayStart },
+    },
+  });
+
+  const accountAgeDays = Math.max(0, (Date.now() - stream.user.createdAt.getTime()) / (1000 * 86400));
+
+  return {
+    streamId: stream.id,
+    songId: stream.songId,
+    userId: stream.userId,
+    songDurationSeconds: stream.song.durationSeconds,
+    listenDurationSec: Math.round(listen),
+    mutedDurationSec: Math.round(muted),
+    hiddenDurationSec: Math.round(hidden),
+    seekCount,
+    loopCount,
+    maxPlaybackRate: maxRate,
+    deviceFingerprintSharedWithUsers: deviceSharedUsers,
+    ipSharedWithUsersLast24h: ipSharedUsers,
+    userPriorChargesForSongLast24h: priorCharges,
+    userAccountAgeDays: accountAgeDays,
+    thresholdPct: 25, // matches phase 5 stickyPlayer
+  };
+}
 
 export async function runFanWorker() {
   const worker = new Worker(
     QUEUE_NAMES.agentFan,
     async (job: Job) => {
       const { streamId } = job.data as { streamId: string };
-      logger.info({ streamId, jobId: job.id }, 'fan:start');
-
-      const stream = await prisma.stream.findUnique({
-        where: { id: streamId },
-        include: {
-          song: {
-            select: { durationSeconds: true, publishedPriceUsdc: true, isPublic: true },
-          },
-          ticks: { orderBy: { monotonicMs: 'asc' } },
-          deviceFingerprint: true,
-        },
-      });
-      if (!stream) {
-        logger.warn({ streamId }, 'fan:stream_missing');
-        return;
-      }
-
-      // Compute activeMs (excludes pauses) and largeSeekCount from server-recorded ticks
-      let activeMs = 0;
-      let lastTickMonotonic = stream.ticks[0]?.monotonicMs ?? stream.startedAt.getTime();
-      let largeSeekCount = 0;
-      for (let i = 1; i < stream.ticks.length; i++) {
-        const prev = stream.ticks[i - 1]!;
-        const cur = stream.ticks[i]!;
-        if (!prev.wasPause && !cur.wasPause) {
-          activeMs += Number(cur.monotonicMs - lastTickMonotonic);
+      const started = Date.now();
+      await tracker.inProgress();
+      try {
+        const input = await loadStreamSignals(streamId);
+        if (!input) {
+          logger.warn({ streamId }, 'fan:stream_missing');
+          await tracker.success(Date.now() - started);
+          return;
         }
-        const posDelta = Math.abs(cur.positionSec - prev.positionSec);
-        if (posDelta > 5) largeSeekCount += 1;
-        lastTickMonotonic = cur.monotonicMs;
-      }
 
-      // Concurrent stream check
-      const concurrent = await prisma.stream.count({
-        where: {
-          userId: stream.userId,
-          id: { not: stream.id },
-          startedAt: { gte: new Date(Date.now() - 60_000) },
-          endedAt: null,
-        },
-      });
+        const decision = decideFan(input);
 
-      // User history snapshot
-      const now = Date.now();
-      const [streamsLast1h, streamsLast24h, uniqueDevicesLast7d, uniqueIpsLast7d, priorFraudAgg, user] =
-        await Promise.all([
-          prisma.stream.count({
-            where: {
-              userId: stream.userId,
-              startedAt: { gte: new Date(now - 60 * 60 * 1000) },
-            },
-          }),
-          prisma.stream.count({
-            where: {
-              userId: stream.userId,
-              startedAt: { gte: new Date(now - 24 * 60 * 60 * 1000) },
-            },
-          }),
-          prisma.deviceFingerprint.count({
-            where: {
-              userId: stream.userId,
-              lastSeenAt: { gte: new Date(now - 7 * 24 * 60 * 60 * 1000) },
-            },
-          }),
-          prisma.stream
-            .findMany({
-              where: {
-                userId: stream.userId,
-                startedAt: { gte: new Date(now - 7 * 24 * 60 * 60 * 1000) },
-              },
-              select: { ipAddress: true },
-              distinct: ['ipAddress'],
-            })
-            .then((rows) => rows.filter((r) => r.ipAddress).length),
-          prisma.stream.aggregate({
-            where: { userId: stream.userId, fraudScore: { gt: 0 } },
-            _avg: { fraudScore: true },
-          }),
-          prisma.user.findUnique({
-            where: { id: stream.userId },
-            select: { createdAt: true },
-          }),
-        ]);
-
-      // Device fingerprint → user count (other users sharing this fingerprint)
-      let deviceFingerprintUserCount = 0;
-      if (stream.deviceFingerprintId) {
-        // a fingerprint can be associated with multiple users if shared
-        deviceFingerprintUserCount = await prisma.deviceFingerprint.count({
-          where: {
-            id: stream.deviceFingerprintId,
-            userId: { not: stream.userId },
+        // Persist
+        await prisma.stream.update({
+          where: { id: streamId },
+          data: {
+            classification: decision.classification,
+            fraudScore: decision.fraudScore,
+            flaggedAbuse: decision.fraudScore >= 50,
+            fraudSignals: decision.signals as object,
+            manualReview: decision.classification === 'fraudulent_stream' || decision.classification === 'suspicious_stream',
+            manualReviewReason: decision.classification === 'fraudulent_stream' ? 'Fraud Sentinel agent flagged as fraudulent' : 'Fan Agent low trust',
+            listenDurationSec: input.listenDurationSec,
+            mutedDurationSec: input.mutedDurationSec,
+            hiddenDurationSec: input.hiddenDurationSec,
+            seekCount: input.seekCount,
+            loopCount: input.loopCount,
+            maxPlaybackRate: input.maxPlaybackRate,
+            paymentTriggered: decision.shouldCharge,
+            paymentTriggerSec: decision.paymentTriggerSec,
           },
         });
-        // +1 for the current user
-        deviceFingerprintUserCount += 1;
-      }
 
-      const ctx: FanStreamContext = {
-        streamId: stream.id,
-        userId: stream.userId,
-        songId: stream.songId,
-        durationSeconds: stream.song.durationSeconds,
-        startedAt: stream.startedAt,
-        endedAt: stream.endedAt,
-        charged: stream.charged,
-        flaggedAbuse: stream.flaggedAbuse,
-        ticks: stream.ticks.map((t) => ({
-          monotonicMs: Number(t.monotonicMs),
-          positionSec: t.positionSec,
-          wasSeek: t.wasSeek,
-          wasPause: t.wasPause,
-          wasMuted: t.wasMuted,
-          wasHidden: t.wasHidden,
-          wasLooped: t.wasLooped,
-          audioElementVolume: t.audioElementVolume,
-        })),
-        largeSeekCount,
-        activeMs,
-        hasRecentConcurrentStream: concurrent > 0,
-        userHistory: {
-          streamsLast1h,
-          streamsLast24h,
-          uniqueDevicesLast7d,
-          uniqueIpsLast7d,
-          priorFraudScoreAvg: priorFraudAgg._avg.fraudScore ?? 0,
-          accountAgeDays: user
-            ? Math.floor((now - user.createdAt.getTime()) / (24 * 60 * 60 * 1000))
-            : 0,
-        },
-        ipAddress: stream.ipAddress,
-        deviceFingerprintId: stream.deviceFingerprintId,
-        deviceFingerprintUserCount,
-      };
-
-      const decision = decideFan({ streamId }, ctx);
-
-      // Persist stream fraud score + signals
-      await prisma.stream.update({
-        where: { id: stream.id },
-        data: {
-          fraudScore: decision.fraudScore,
-          fraudSignals: decision.signals as unknown as object,
-          manualReview: decision.manualReview,
-          manualReviewReason: decision.manualReview ? decision.reason : null,
-        },
-      });
-
-      await prisma.agentLog.create({
-        data: {
-          agent: 'fan',
-          streamId: stream.id,
-          decision: decision.shouldCharge
-            ? 'charge'
-            : decision.manualReview
-              ? 'manual_review'
-              : 'skip',
-          reason: decision.reason,
-          scoreBreakdown: { fraudScore: decision.fraudScore } as unknown as object,
-          payloadJson: { ctx, signals: decision.signals } as unknown as object,
-        },
-      });
-
-      // Manual review: create a queue row + flag stream
-      if (decision.manualReview) {
-        await prisma.manualReview.upsert({
-          where: { streamId: stream.id },
-          create: {
-            streamId: stream.id,
-            songId: stream.songId,
-            subjectUserId: stream.userId,
-            fraudScore: decision.fraudScore,
-            fraudSignals: decision.signals as unknown as object,
-            status: 'pending',
-          },
-          update: {
-            fraudScore: decision.fraudScore,
-            fraudSignals: decision.signals as unknown as object,
-            status: 'pending',
-          },
-        });
-        await prisma.payment
-          .upsert({
-            where: { streamId: stream.id },
+        if (decision.classification === 'fraudulent_stream' || decision.classification === 'suspicious_stream') {
+          await prisma.manualReview.upsert({
+            where: { streamId },
             create: {
-              streamId: stream.id,
-              songId: stream.songId,
-              payerUserId: stream.userId,
-              amountUsdc: stream.song.publishedPriceUsdc ?? '0',
-              amountBaseUnits: '0',
-              status: 'manual_review',
+              streamId,
+              songId: input.songId,
+              subjectUserId: input.userId,
+              fraudScore: decision.fraudScore,
+              fraudSignals: decision.signals as object,
+              status: 'pending',
             },
-            update: { status: 'manual_review' },
-          })
-          .catch(() => undefined);
-        logger.warn(
-          { streamId, fraudScore: decision.fraudScore },
-          'fan:manual_review',
-        );
-        return;
+            update: {
+              fraudScore: decision.fraudScore,
+              fraudSignals: decision.signals as object,
+            },
+          });
+        }
+
+        await recordDecision({
+          prisma,
+          agent: 'fan',
+          subject: { type: 'stream', id: streamId },
+          input,
+          decision: decision.classification,
+          confidence: Math.max(0, 100 - decision.fraudScore),
+          reasons: decision.reasons,
+          categoryScores: decision.signals,
+          latencyMs: Date.now() - started,
+          crossLinks: { streamId, songId: input.songId, userId: input.userId },
+        });
+
+        await tracker.success(Date.now() - started);
+        logger.info({ streamId, classification: decision.classification, fraudScore: decision.fraudScore }, 'fan:done');
+      } catch (err) {
+        logger.error({ err, streamId }, 'fan:failed');
+        await tracker.failure(Date.now() - started);
+        throw err;
       }
-
-      if (!decision.shouldCharge) {
-        logger.info({ streamId, reason: decision.reason }, 'fan:skip');
-        return;
-      }
-
-      // Eligible → create a pending Payment row
-      const env = getEnv();
-      const priceUsdc = stream.song.publishedPriceUsdc ?? '0';
-      const amountBaseUnits = BigInt(
-        Math.floor(Number(priceUsdc) * 10 ** env.USDC_DECIMALS),
-      ).toString();
-
-      await prisma.payment.upsert({
-        where: { streamId: stream.id },
-        create: {
-          streamId: stream.id,
-          songId: stream.songId,
-          payerUserId: stream.userId,
-          amountUsdc: priceUsdc,
-          amountBaseUnits,
-          status: 'pending',
-        },
-        update: {
-          amountUsdc: priceUsdc,
-          amountBaseUnits,
-          status: 'pending',
-        },
-      });
-
-      logger.info(
-        { streamId, amountBaseUnits, fraudScore: decision.fraudScore },
-        'fan:charge_ready',
-      );
-      // The realtime gateway will pick up the pending state and emit
-      // stream:payment_due with the actual amount + recipient.
     },
-    { connection: getQueueConnection(), concurrency: 32 },
+    { connection: getQueueConnection(), concurrency: 8 },
   );
-
-  worker.on('failed', (job, err) => {
-    logger.error({ jobId: job?.id, err }, 'fan:failed');
-  });
-
+  worker.on('failed', (job, err) => logger.error({ jobId: job?.id, err }, 'fan:failed'));
   return worker;
-}
-
-// Helper for the realtime layer to build EIP-712 params for the listener to sign.
-export async function buildPaymentDueParams(streamId: string) {
-  const stream = await prisma.stream.findUnique({
-    where: { id: streamId },
-    include: {
-      song: {
-        select: {
-          publishedPriceUsdc: true,
-          artistId: true,
-          artist: { select: { wallet: { select: { address: true } } } },
-        },
-      },
-      payer: { select: { wallet: { select: { address: true } } } },
-    },
-  });
-  if (!stream) return null;
-  const payment = await prisma.payment.findUnique({ where: { streamId } });
-  if (!payment) return null;
-  if (payment.status !== 'pending') return null;
-
-  const env = getEnv();
-  const nonce = `0x${Array.from(new Uint8Array(32), () =>
-    Math.floor(Math.random() * 256).toString(16).padStart(2, '0'),
-  ).join('')}` as `0x${string}`;
-
-  return {
-    streamId,
-    songId: stream.songId,
-    amountUsdc: stream.song.publishedPriceUsdc ?? '0',
-    amountBaseUnits: payment.amountBaseUnits,
-    from: stream.payer.wallet?.address,
-    to: stream.song.artist.wallet?.address,
-    nonce,
-    validAfter: String(Math.floor(Date.now() / 1000)),
-    validBefore: String(Math.floor(Date.now() / 1000) + 60),
-    chainId: env.ARC_CHAIN_ID,
-    usdcContract: env.USDC_CONTRACT_ADDRESS,
-  };
 }

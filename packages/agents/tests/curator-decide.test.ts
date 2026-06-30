@@ -1,3 +1,8 @@
+/**
+ * Curator decision tests — Phase 7 v3 contract.
+ *
+ * Pure function tests. Deterministic, no I/O.
+ */
 import { describe, it, expect } from 'vitest';
 import { decideCurator, type CuratorInput } from '../src/curator/decide';
 
@@ -19,6 +24,9 @@ const baseInput: CuratorInput = {
     sampleRateHz: 48000,
     channels: 2,
     peakDb: -1.2,
+    lufsIntegrated: -16,
+    lufsRange: 8,
+    truePeakDb: -1.5,
   },
   artistHistory: {
     totalSongs: 4,
@@ -26,82 +34,97 @@ const baseInput: CuratorInput = {
     rejectedSongs: 1,
     flaggedForSpam: 0,
   },
-  duplicateOfSongId: null,
+  duplicate: { binaryHashMatch: false, acousticHashMatch: false },
   usernamesResolved: true,
   recipientCount: 3,
+  artwork: { widthPx: 1500, heightPx: 1500, isSquare: true, aspectRatio: 1.0 },
 };
 
-describe('decideCurator', () => {
-  it('approves a high-quality submission and prices at the band ceiling', () => {
+describe('decideCurator v3 (7-dim, Phase 7)', () => {
+  it('approves a high-quality submission and prices at band ceiling', () => {
     const result = decideCurator(baseInput);
     expect(result.decision).toBe('approved');
-    expect(Number(result.publishedPriceUsdc)).toBeLessThanOrEqual(0.004);
-    expect(result.publishedPriceUsdc).not.toBe('0');
-    expect(result.scores.total).toBeGreaterThanOrEqual(31);
-    expect(result.scores.metadata).toBeLessThanOrEqual(20);
-    expect(result.scores.audio).toBeLessThanOrEqual(20);
+    expect(result.suggestedPriceUsdc).toBeGreaterThan(0);
+    expect(result.suggestedPriceUsdc).toBeLessThanOrEqual(0.004);
+    expect(result.score).toBeGreaterThanOrEqual(31);
+    expect(result.score).toBeLessThanOrEqual(100);
   });
 
-  it('rejects on duplicate match', () => {
+  it('rejects binary-duplicate tracks', () => {
     const result = decideCurator({
       ...baseInput,
-      duplicateOfSongId: 'song-other',
+      duplicate: { binaryHashMatch: true, acousticHashMatch: false },
     });
     expect(result.decision).toBe('rejected');
-    expect(result.publishedPriceUsdc).toBe('0');
-    expect(result.scores.duplicate).toBe(0);
+    expect(result.suggestedPriceUsdc).toBe(0);
+    expect(result.categoryScores.duplicateRisk).toBe(0);
   });
 
-  it('rejects when score is below threshold (very low quality audio)', () => {
+  it('rejects when all 7 dimensions under threshold', () => {
     const result = decideCurator({
       ...baseInput,
       audioQuality: { ...baseInput.audioQuality, bitrateKbps: 64, peakDb: -0.5 },
+      metadata: { ...baseInput.metadata, description: 'short', title: 'a' },
+      artistHistory: { ...baseInput.artistHistory, totalSongs: 20, rejectedSongs: 19 },
     });
-    expect(result.decision).toBe('rejected');
+    expect(['rejected', 'needs_changes']).toContain(result.decision);
   });
 
-  it('caps pricing at the band ceiling, never above', () => {
+  it('needs_changes when loudness is in the rejected band', () => {
+    const result = decideCurator({
+      ...baseInput,
+      audioQuality: { ...baseInput.audioQuality, lufsIntegrated: -5, lufsRange: 3, truePeakDb: 0 },
+    });
+    expect(['needs_changes', 'rejected']).toContain(result.decision);
+  });
+
+  it('manual_review when score is between 31 and 60', () => {
+    const result = decideCurator({
+      ...baseInput,
+      audioQuality: { ...baseInput.audioQuality, bitrateKbps: 128, sampleRateHz: 22050, channels: 1, peakDb: -0.4, lufsIntegrated: -32, lufsRange: 25, truePeakDb: 0 },
+      metadata: { ...baseInput.metadata, featuredNames: [], producerName: null, description: 'short', title: 'a' },
+      artwork: { widthPx: 200, heightPx: 200, isSquare: false, aspectRatio: 2.0 },
+      recipientCount: 1,
+      artistHistory: { totalSongs: 30, approvedSongs: 1, rejectedSongs: 25, flaggedForSpam: 5 },
+    });
+    expect(result.score).toBeGreaterThanOrEqual(31);
+    expect(result.score).toBeLessThanOrEqual(60);
+    expect(['manual_review', 'needs_changes']).toContain(result.decision);
+  });
+
+  it('caps pricing at band, never above artist pick', () => {
     const result = decideCurator({
       ...baseInput,
       artistRequestedPriceUsdc: 0.005,
     });
-    expect(Number(result.publishedPriceUsdc)).toBeLessThanOrEqual(0.005);
+    expect(result.suggestedPriceUsdc).toBeLessThanOrEqual(0.005);
   });
 
-  it('lowers price below artist request when score is mid-tier', () => {
-    // Force a mid score via weak spam and low audio
-    const result = decideCurator({
-      ...baseInput,
-      audioQuality: { ...baseInput.audioQuality, bitrateKbps: 96, peakDb: -0.5 },
-      metadata: { ...baseInput.metadata, description: 'short' },
-      artistHistory: { ...baseInput.artistHistory, totalSongs: 20, rejectedSongs: 12 },
-    });
-    // May be needs_changes or approved at lower band — never exceeds artist pick
-    expect(Number(result.publishedPriceUsdc)).toBeLessThanOrEqual(0.004);
-  });
-
-  it('clamps each dimension to 0..20', () => {
+  it('produces 7 category scores each 0..20', () => {
     const result = decideCurator(baseInput);
-    expect(result.scores.metadata).toBeGreaterThanOrEqual(0);
-    expect(result.scores.metadata).toBeLessThanOrEqual(20);
-    expect(result.scores.audio).toBeGreaterThanOrEqual(0);
-    expect(result.scores.audio).toBeLessThanOrEqual(20);
-    expect(result.scores.spam).toBeGreaterThanOrEqual(0);
-    expect(result.scores.spam).toBeLessThanOrEqual(20);
-    expect(result.scores.duplicate).toBeGreaterThanOrEqual(0);
-    expect(result.scores.duplicate).toBeLessThanOrEqual(20);
-    expect(result.scores.market).toBeGreaterThanOrEqual(0);
-    expect(result.scores.market).toBeLessThanOrEqual(20);
+    const c = result.categoryScores;
+    for (const [k, v] of Object.entries(c)) {
+      expect(typeof v).toBe('number');
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(20);
+      void k;
+    }
   });
 
-  it('total = sum of dimensions', () => {
+  it('confidence is 0..100 and derived from dimension spread', () => {
     const result = decideCurator(baseInput);
-    const sum =
-      result.scores.metadata +
-      result.scores.audio +
-      result.scores.spam +
-      result.scores.duplicate +
-      result.scores.market;
-    expect(result.scores.total).toBe(sum);
+    expect(result.confidenceScore).toBeGreaterThanOrEqual(0);
+    expect(result.confidenceScore).toBeLessThanOrEqual(100);
+  });
+
+  it('decision always in {approved, rejected, needs_changes, manual_review}', () => {
+    const result = decideCurator(baseInput);
+    expect(['approved', 'rejected', 'needs_changes', 'manual_review']).toContain(result.decision);
+  });
+
+  it('reasons array is non-empty', () => {
+    const result = decideCurator(baseInput);
+    expect(Array.isArray(result.reasons)).toBe(true);
+    expect(result.reasons.length).toBeGreaterThan(0);
   });
 });

@@ -259,16 +259,31 @@ model Song {
   artistPriceUsdc       String   // requested by artist
   publishedPriceUsdc    String?  // set by curator after review
 
-  // Curator evaluation (5 dimensions × 20 points = 100)
+  // Curator evaluation v3 — 7 dimensions × 20 points = 140 raw → normalized 0–100
+  //   scoreMetadata:    title/length, artist/featured/producer, description, resolved usernames, cover URL
+  //   scoreAudio:       bitrate/sample rate/channels/codec/peak, silence ratio
+  //   scoreLoudness:    EBU R128 integrated LUFS, LRA range, true peak (added Phase 7)
+  //   scoreArtwork:     min resolution, square-ish aspect ratio (added Phase 7)
+  //   scoreMarket:      artist history, recipient count, duration sweet spot
+  //   scoreDuplicate:   binary + acoustic fingerprint check (inverted; 20 = unique)
+  //   scoreSpam:        description markers, duration extremes, prior flags (inverted; 20 = legit)
+  //
+  //   decision:         approved | rejected | needs_changes | manual_review (Phase 7)
+  //   confidence:       0–100 (Phase 7); higher = stronger signals, fewer weak dimensions
   curatorStatus         String    @default("pending")     // see CuratorDecision
+  curatorDecision       String?   @default("approved")    // explicit decision string (Phase 7)
   curatorScoreTotal     Int?                          // 0–100
   curatorScoreMetadata  Int?                          // 0–20
   curatorScoreAudio     Int?                          // 0–20
   curatorScoreSpam      Int?                          // 0–20 (LOW is better; 20 = clearly legitimate)
   curatorScoreDuplicate Int?                         // 0–20 (HIGH = clearly unique)
   curatorScoreMarket    Int?                          // 0–20 (engagement prediction)
+  curatorScoreLoudness  Int?                         // 0–20 (Phase 7 — EBU R128 scoring)
+  curatorScoreArtwork   Int?                         // 0–20 (Phase 7 — resolution + aspect)
+  curatorConfidence     Int?                         // 0–100 (Phase 7)
   curatorReasons        String[]  @default([])
   curatorReviewedAt     DateTime?
+  curatorDecisionPayload Json?                       // full CategoryScores snapshot (Phase 7)
 
   // Lifecycle (see SongStatus)
   //   draft                  → metadata only, no media
@@ -338,6 +353,20 @@ model Stream {
   fraudSignals    Json?                       // breakdown of contributing signals
   manualReview    Boolean   @default(false)   // true → goes to manual review queue
   manualReviewReason String?
+
+  // Phase 7 — Fan Agent v2 stream classification
+  classification   String    @default("valid_stream") // valid_stream | partial_stream | suspicious_stream | fraudulent_stream
+  // Telemetry summary (snapshot of PlaybackTick aggregates)
+  listenDurationSec Int?     // seconds the page was visible + audio playing + not muted
+  mutedDurationSec  Int?
+  hiddenDurationSec Int?
+  seekCount         Int?     // total seek events
+  loopCount         Int?     // total loop re-entries
+  maxPlaybackRate   Float?   // 1.0 = normal, 2.0 = 2x speed
+  paymentTriggered  Boolean  @default(false)
+  paymentTriggerSec Int?     // monotonicMs/1000 when payment was charged
+  // Fan decision log id (FK to AgentDecisionLog)
+  fanDecisionLogId String?
 
   // Connection context
   ipAddress       String?
@@ -534,9 +563,13 @@ model Payout {
 
   recipientUserId   String?
   recipientUsername String
+  recipientWalletId String?   // set when the recipient has a Pazzera Wallet; null for external recipients
   recipientAddress  String
   recipientRole     String   // mirrors RoyaltyRecipient.role at payout time
   splitPercentageBps Int     // mirrors RoyaltyRecipient.splitPercentageBps
+
+  // Phase 7: also track kind for fraud analyst queries (e.g. 'royalty_payout' | 'withdraw' | 'refund')
+  kind              String   @default("royalty_payout")
 
   amountUsdc        String
   amountBaseUnits   String
@@ -745,6 +778,155 @@ model ManualReview {
 
   @@index([status, createdAt])
   @@index([fraudScore(sort: Desc)])
+}
+
+// ════════════════════════════════════════════════════════════════════
+// PHASE 7: AGENT DECISION LOGS + HEALTH + FRAUD ALERTS
+// ════════════════════════════════════════════════════════════════════
+//
+// AgentDecisionLog is the canonical audit record for every AI decision.
+// Every agent worker MUST persist here in addition to AgentLog.
+// - inputHash: SHA-256(canonical input JSON) — lets us dedupe + replay.
+// - inputs / outputs: full structured snapshots so judges can inspect
+//   a decision without re-running anything.
+// - confidence: 0–100 (agent-specific).
+// - latencyMs: wall clock from job start to decision.
+// - reasons[]: human-readable bullets for the AI Explainability UI.
+//
+// AgentHealthMetrics powers the Agent Status cards on the admin
+// dashboard. Updated by the rollup worker every minute from BullMQ.
+//
+// FraudAlert is produced by the Fraud Sentinel agent and is the
+// canonical storage for fraud detections. High severity auto-freezes
+// related wallet payouts (handled in the worker, NOT via trigger).
+//
+// AgentName enum: curator | fan | split | discovery | fraud_sentinel
+// FraudSeverity:  low | medium | high | critical
+// FraudEntityType: user | wallet | song | payment_cluster | ip_cluster
+// FraudAlertStatus: open | under_review | resolved | false_positive | escalated
+// AgentHealthScope: live | minute | hour | day
+
+model AgentDecisionLog {
+  id           String   @id @default(cuid())
+
+  // Which agent made this decision
+  agent        String   // see AgentName
+
+  // What it was deciding on
+  subjectType  String   // song | stream | payment | user | wallet | playlist | session
+  subjectId    String
+
+  // Optional cross-links
+  songId       String?
+  streamId     String?
+  paymentId    String?
+  userId       String?
+
+  // Decision payload
+  decision     String   // 'approved' | 'rejected' | 'needs_changes' | 'manual_review' | 'charged' | 'flagged' | 'frozen' | ...
+  confidence   Int      @default(50)   // 0–100
+
+  // Reasons (human-readable, what the AI Explainability UI shows)
+  reasons      String[] @default([])
+
+  // Full breakdown (curator categoryScores, fan signals, fraud reasons with weights)
+  categoryScores Json?
+
+  // Raw inputs (truncated for storage if huge — large blobs go to scoreBreakdown above)
+  inputs       Json?
+
+  // Performance
+  latencyMs    Int?
+  retries      Int      @default(0)
+
+  // Determinism: inputHash so we can replay + dedupe
+  inputHash    String
+
+  // Soft failure (decision was made but post-decision steps failed)
+  warnings     String[] @default([])
+
+  // Audit
+  version      String   @default("v3") // bumps when the agent's scoring model changes
+  producedBy   String   @default("pazzera-agent-runtime")
+  createdAt    DateTime @default(now())
+
+  @@index([agent, createdAt(sort: Desc)])
+  @@index([subjectType, subjectId])
+  @@index([songId])
+  @@index([streamId])
+  @@index([paymentId])
+  @@index([userId])
+  @@index([decision, createdAt(sort: Desc)])
+  @@index([inputHash])
+  @@unique([agent, inputHash])  // deterministic + idempotent
+}
+
+model AgentHealthMetrics {
+  id           String   @id @default(cuid())
+  agent        String
+  scope        String   @default("minute") // see AgentHealthScope
+  bucketStart  DateTime
+  bucketEnd    DateTime
+
+  // Throughput
+  jobsProcessed Int     @default(0)
+  jobsFailed    Int     @default(0)
+  jobsRetried   Int     @default(0)
+
+  // Latency
+  p50LatencyMs Int      @default(0)
+  p95LatencyMs Int      @default(0)
+  p99LatencyMs Int      @default(0)
+
+  // Snapshot of running state at bucketEnd
+  queueDepth   Int      @default(0)
+  activeJobs   Int      @default(0)
+  lastExecutionAt DateTime?
+
+  // Health status (computed from success rate)
+  status       String   @default("healthy") // healthy | degraded | unhealthy | unknown
+  successRate  Float    @default(1.0) // 0..1
+
+  createdAt    DateTime @default(now())
+
+  @@unique([agent, scope, bucketStart])
+  @@index([agent, scope, bucketStart(sort: Desc)])
+  @@index([status])
+}
+
+model FraudAlert {
+  id           String   @id @default(cuid())
+  severity     String   // see FraudSeverity
+  entityType   String   // see FraudEntityType
+  entityId     String   // ID of the user / wallet / song / payment cluster
+
+  // SubjectType / SubjectId links
+  subjectUserId String?
+  subjectSongId String?
+  subjectWalletId String?
+
+  // Reasons + score breakdown
+  score        Int      // 0–100
+  reasons      String[] @default([])
+  metricBreakdown Json? // weighted signals: { streamFarmScore: 80, circularPaymentScore: 70, ... }
+
+  // Status
+  status       String   @default("open") // see FraudAlertStatus
+  decidedById  String?
+  decisionNote String?
+  decidedAt    DateTime?
+
+  // Auto-action flag (Phase 7: high severity auto-freezes payouts)
+  autoActioned Boolean  @default(false)
+  autoAction   String?  // 'wallet_frozen' | 'payouts_paused' | 'account_locked'
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([severity, createdAt(sort: Desc)])
+  @@index([entityType, entityId])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([subjectUserId])
 }
 
 // ════════════════════════════════════════════════════════════════════

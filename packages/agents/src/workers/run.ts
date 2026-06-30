@@ -8,6 +8,8 @@ import { runCuratorWorker } from './curator-worker';
 import { runFanWorker } from './fan-worker';
 import { runSplitWorker } from './split-worker';
 import { runDiscoveryWorker } from './discovery-worker';
+import { runFraudWorker } from './fraud-worker';
+import { runAnalyticsRollupWorker } from './analytics-rollup-worker';
 import { runWalletProvisionWorker } from './wallet-provision-worker';
 import { runAuthCleanupWorker } from './auth-cleanup-worker';
 import { runWalletIndexerWorker } from './wallet-indexer-worker';
@@ -22,6 +24,8 @@ async function main() {
   const fan = await runFanWorker();
   const split = await runSplitWorker();
   const discovery = await runDiscoveryWorker();
+  const fraud = await runFraudWorker();
+  const analytics = await runAnalyticsRollupWorker();
   const walletProvision = await runWalletProvisionWorker();
   const walletIndexer = await runWalletIndexerWorker();
   const authCleanup = await runAuthCleanupWorker();
@@ -47,6 +51,14 @@ async function main() {
     { repeat: { every: env.INDEXER_INTERVAL_SECONDS * 1000 } },
   );
 
+  // Phase 7 — recurring AI agent jobs
+  const fraudQ = getQueue(QUEUE_NAMES.agentFraud);
+  await fraudQ.add('fraud.scan', { detector: 'all' }, { repeat: { every: 5 * 60 * 1000 } });
+  const analyticsQ = getQueue(QUEUE_NAMES.analyticsRollup);
+  await analyticsQ.add('analytics.5min', { task: 'rollup', window: '5min' }, { repeat: { every: 5 * 60 * 1000 } });
+  await analyticsQ.add('analytics.hour', { task: 'rollup', window: 'hour' }, { repeat: { pattern: '7 * * * *' } });
+  await analyticsQ.add('analytics.day', { task: 'rollup', window: 'day' }, { repeat: { pattern: '23 5 * * *' } });
+
   const shutdown = async (sig: string) => {
     logger.info({ sig }, 'workers:shutting_down');
     await Promise.all([
@@ -54,6 +66,8 @@ async function main() {
       fan.close(),
       split.close(),
       discovery.close(),
+      fraud.close(),
+      analytics.close(),
       walletProvision.close(),
       walletIndexer.close(),
       authCleanup.close(),

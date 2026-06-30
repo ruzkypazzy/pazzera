@@ -12,6 +12,7 @@ export const QUEUE_NAMES = {
   agentFan: 'agent:fan',
   agentSplit: 'agent:split',
   agentDiscovery: 'agent:discovery',
+  agentFraud: 'agent:fraud_sentinel',
   paymentSettle: 'payment:settle',
   streamMonitor: 'stream:monitor',
   walletIndexer: 'wallet:indexer',
@@ -95,6 +96,15 @@ export interface WalletIndexerJobPayload {
 
 export interface MaintenanceJobPayload {
   task: string;
+}
+
+export interface FraudJobPayload {
+  detector: 'stream_farm' | 'payout_abuse' | 'sybil' | 'circular_payments' | 'all';
+}
+
+export interface AnalyticsRollupJobPayload {
+  window: '5min' | 'hour' | 'day';
+  bucketStart?: string;
 }
 
 // ─── Default job options ─────────────────────────────────────────────
@@ -204,6 +214,12 @@ export const enqueue = {
     getQueue(QUEUE_NAMES.maintenance).add(payload.task, payload, opts),
   analyticsRollup: (payload: MaintenanceJobPayload, opts?: JobsOptions) =>
     getQueue(QUEUE_NAMES.analyticsRollup).add(payload.task, payload, opts),
+  fraud: (payload: FraudJobPayload, opts?: JobsOptions) =>
+    getQueue(QUEUE_NAMES.agentFraud).add('fraud.scan', payload, {
+      attempts: 1,
+      removeOnComplete: { count: 50, age: 24 * 3600 },
+      ...opts,
+    }),
 };
 
 export function getAllQueues(): Queue[] {

@@ -1,208 +1,211 @@
 /**
- * Fan Agent — pure decision function.
+ * Fan Agent v2 — per-stream decision function.
  *
- * Outputs:
- *   - shouldCharge: true → proceed to payment settlement
- *   - fraudScore:   0–100, persisted on Stream for admin dashboards
- *   - signals:      breakdown of contributing signals
- *   - manualReview: if fraudScore >= threshold, payment enters manual review
+ * Pure function: takes a stream's telemetry + history + environment,
+ * decides:
  *
- * Signal catalog:
- *   loop_play        — re-entering threshold region from the end
- *   muted_play       — sustained muted playback
- *   hidden_play      — tab background / window minimized
- *   device_repeat    — same fingerprint across many users
- *   ip_repeat        — many users from same IP
- *   farm_pattern     — many streams in a short window
- *   abnormal_speed   — playback speed implausibly high
- *   seek_abuse       — repeated large seeks in window
- *   position_lie     — reported position > tick-derived maximum
+ *   - classification:   valid | partial | suspicious | fraudulent
+ *   - fraudScore:       0–100
+ *   - shouldCharge:     boolean (true if the listener has earned the
+ *                       payment by crossing the threshold AND the
+ *                       stream looks legitimate)
+ *   - paymentTriggerSec: seconds-into-stream when should fire
+ *   - reasons:          human-readable bullets
+ *   - signals:          numeric breakdown for the AI Explainability UI
+ *
+ * Threshold default: 25% of the song's duration. An artist who asks
+ * for 0.005 USDC/stream doesn't want to get ripped off by 30-second
+ * skim plays, and a listener who bails early shouldn't pay.
+ *
+ * Signal sources:
+ *   - listen duration vs threshold
+ *   - mute state (if muted most of listen, treat as background)
+ *   - visibility (if hidden most of listen, treat as farm)
+ *   - seek behaviour (forward seeks beyond position; count of seeks)
+ *   - playback speed (anything ≠ 1.0 lowers trust; 2x burns rewards fast)
+ *   - repeated loops (single-stream looping re-trips the threshold)
+ *   - device fingerprint reuse (different user on same device = suspicious)
+ *   - IP clustering (same IP across many user accounts = fraud)
+ *   - prior charge history (already charged for this song today = spam)
+ *
+ * Decision rules:
+ *   fraud >= 75            → fraudulent    → never charge
+ *   fraud >= 50            → suspicious    → never charge, send to manual review
+ *   fraud >= 25            → partial       → charge only if listening > 50% threshold
+ *   listen >= threshold    → valid + shouldCharge = true
+ *   listen >= 0.5 * threshold → partial + shouldCharge = true
+ *   else                   → partial or valid, shouldCharge = false
  */
-import type { FanJobPayload } from '@pazzera/queue';
+import type { FanDecision } from '@pazzera/core';
 
-export interface FanStreamContext {
+export interface FanInput {
   streamId: string;
-  userId: string;
   songId: string;
-  durationSeconds: number;
-  startedAt: Date;
-  endedAt: Date | null;
-  charged: boolean;
-  flaggedAbuse: boolean;
-  ticks: {
-    monotonicMs: number;
-    positionSec: number;
-    wasSeek: boolean;
-    wasPause: boolean;
-    wasMuted?: boolean;
-    wasHidden?: boolean;
-    wasLooped?: boolean;
-    audioElementVolume?: number | null;
-  }[];
-  largeSeekCount: number;
-  activeMs: number;
-  hasRecentConcurrentStream: boolean;
-  // User-level history (joined in by worker)
-  userHistory: {
-    streamsLast1h: number;
-    streamsLast24h: number;
-    uniqueDevicesLast7d: number;
-    uniqueIpsLast7d: number;
-    priorFraudScoreAvg: number;
-    accountAgeDays: number;
+  userId: string;
+  songDurationSeconds: number;
+  listenDurationSec: number;
+  mutedDurationSec: number;
+  hiddenDurationSec: number;
+  seekCount: number;
+  loopCount: number;
+  maxPlaybackRate: number;
+  deviceFingerprintSharedWithUsers: number; // number of OTHER users on this device
+  ipSharedWithUsersLast24h: number;          // number of OTHER users on same IP in last 24h
+  userPriorChargesForSongLast24h: number;    // count of streams user already paid for today
+  userAccountAgeDays: number;
+  // Threshold the catalog wants to cross before charging (e.g. 25%)
+  thresholdPct: number;
+}
+
+const FRAUD_FRAUDULENT = 75;
+const FRAUD_SUSPICIOUS = 50;
+const FRAUD_PARTIAL = 25;
+
+export function decideFan(input: FanInput): FanDecision {
+  const reasons: string[] = [];
+  const signals: Record<string, number> = {};
+  let fraud = 0;
+
+  // ─── duration signal ────────────────────────────────────────
+  const thresholdSec = Math.max(5, Math.round((input.songDurationSeconds * input.thresholdPct) / 100));
+  const listenRatio = input.songDurationSeconds === 0 ? 0 : input.listenDurationSec / input.songDurationSeconds;
+  signals.listenDurationSec = input.listenDurationSec;
+  signals.thresholdSec = thresholdSec;
+  signals.listenRatio = Number(listenRatio.toFixed(3));
+
+  // ─── mute / hidden penalties ────────────────────────────────
+  const mutedRatio =
+    input.listenDurationSec === 0 ? 0 : Math.min(1, input.mutedDurationSec / Math.max(1, input.listenDurationSec));
+  const hiddenRatio =
+    input.listenDurationSec === 0 ? 0 : Math.min(1, input.hiddenDurationSec / Math.max(1, input.listenDurationSec));
+  signals.mutedRatio = Number(mutedRatio.toFixed(3));
+  signals.hiddenRatio = Number(hiddenRatio.toFixed(3));
+  if (mutedRatio > 0.5) {
+    fraud += 30;
+    reasons.push(`Audio muted ${(mutedRatio * 100).toFixed(0)}% of listen time`);
+  } else if (mutedRatio > 0.25) {
+    fraud += 15;
+    reasons.push(`Audio muted ${(mutedRatio * 100).toFixed(0)}% of listen time`);
+  }
+  if (hiddenRatio > 0.5) {
+    fraud += 40;
+    reasons.push(`Tab hidden ${(hiddenRatio * 100).toFixed(0)}% of listen time`);
+  } else if (hiddenRatio > 0.25) {
+    fraud += 20;
+    reasons.push(`Tab hidden ${(hiddenRatio * 100).toFixed(0)}% of listen time`);
+  }
+
+  // ─── playback speed ─────────────────────────────────────────
+  signals.maxPlaybackRate = input.maxPlaybackRate;
+  if (input.maxPlaybackRate > 1.5) {
+    fraud += 30;
+    reasons.push(`Unusual playback rate (${input.maxPlaybackRate}x)`);
+  } else if (input.maxPlaybackRate > 1.1) {
+    fraud += 10;
+    reasons.push(`Slightly elevated playback rate (${input.maxPlaybackRate}x)`);
+  }
+
+  // ─── seek behaviour ─────────────────────────────────────────
+  signals.seekCount = input.seekCount;
+  if (input.seekCount > 6) {
+    fraud += 15;
+    reasons.push(`Excessive seeking (${input.seekCount} seeks)`);
+  }
+
+  // ─── loop / farming ─────────────────────────────────────────
+  signals.loopCount = input.loopCount;
+  if (input.loopCount > 3) {
+    fraud += 25;
+    reasons.push(`Repeated loops (${input.loopCount} re-entries near threshold)`);
+  }
+
+  // ─── device fingerprint / IP ────────────────────────────────
+  if (input.deviceFingerprintSharedWithUsers > 0) {
+    fraud += 30;
+    reasons.push(`Device shared with ${input.deviceFingerprintSharedWithUsers} other user(s)`);
+  }
+  signals.deviceSharedUsers = input.deviceFingerprintSharedWithUsers;
+
+  if (input.ipSharedWithUsersLast24h >= 5) {
+    fraud += 40;
+    reasons.push(`IP shared with ${input.ipSharedWithUsersLast24h} users in 24h`);
+  } else if (input.ipSharedWithUsersLast24h >= 2) {
+    fraud += 15;
+    reasons.push(`IP shared with ${input.ipSharedWithUsersLast24h} other users in 24h`);
+  }
+  signals.ipSharedUsers = input.ipSharedWithUsersLast24h;
+
+  // ─── prior abuse of same song ───────────────────────────────
+  if (input.userPriorChargesForSongLast24h >= 3) {
+    fraud += 30;
+    reasons.push(`Already streamed this song ${input.userPriorChargesForSongLast24h}x today`);
+  } else if (input.userPriorChargesForSongLast24h >= 1) {
+    fraud += 10;
+    reasons.push(`Already streamed this song ${input.userPriorChargesForSongLast24h}x today`);
+  }
+  signals.userPriorCharges = input.userPriorChargesForSongLast24h;
+
+  // ─── brand-new account heavy listen = high risk ─────────────
+  if (input.userAccountAgeDays < 1 && listenRatio > 0.9) {
+    fraud += 10;
+    reasons.push('Brand-new account completed a long listen');
+  }
+  signals.accountAgeDays = input.userAccountAgeDays;
+
+  // ─── duration cross-threshold ───────────────────────────────
+  // Even a non-abusive stream is partial if it bails early.
+  let classification: FanDecision['classification'];
+  let shouldCharge = false;
+  let paymentTriggerSec: number | undefined;
+
+  // First gate: classification is set by fraud severity
+  if (fraud >= FRAUD_FRAUDULENT) {
+    classification = 'fraudulent_stream';
+    shouldCharge = false;
+    if (reasons.length === 0) reasons.push('Aggregated fraud severity in critical band');
+  } else if (fraud >= FRAUD_SUSPICIOUS) {
+    classification = 'suspicious_stream';
+    shouldCharge = false;
+    reasons.push('Fraud severity in suspicious band — admin review required');
+  } else if (fraud >= FRAUD_PARTIAL) {
+    classification = 'partial_stream';
+    // can still charge if they actually listened beyond 1.5× threshold
+    shouldCharge = input.listenDurationSec >= thresholdSec * 1.5;
+    if (!shouldCharge) {
+      reasons.push('Listen duration short of lenient charge threshold');
+    }
+  } else {
+    // Clean stream — classification depends on whether they crossed threshold
+    if (input.listenDurationSec >= thresholdSec) {
+      classification = 'valid_stream';
+      shouldCharge = true;
+      paymentTriggerSec = thresholdSec;
+    } else if (input.listenDurationSec >= thresholdSec * 0.5) {
+      classification = 'partial_stream';
+      // Don't charge if below full threshold
+      shouldCharge = false;
+      reasons.push('Listened half-threshold but not full — not enough for a charge');
+    } else {
+      classification = 'partial_stream';
+      shouldCharge = false;
+      reasons.push('Listen below half-threshold — preview only');
+    }
+  }
+
+  if (paymentTriggerSec === undefined && shouldCharge) {
+    paymentTriggerSec = Math.min(input.listenDurationSec, thresholdSec);
+  }
+
+  if (reasons.length === 0) {
+    reasons.push('Listen behaviour within normal range');
+  }
+
+  return {
+    classification,
+    fraudScore: Math.min(100, Math.round(fraud)),
+    shouldCharge,
+    paymentTriggerSec: shouldCharge ? paymentTriggerSec : undefined,
+    reasons,
+    signals,
   };
-  // Stream connection context
-  ipAddress: string | null;
-  deviceFingerprintId: string | null;
-  deviceFingerprintUserCount: number; // how many distinct users share this fingerprint
-}
-
-export interface FanSignal {
-  type: string;
-  severity: number; // 0–100 contribution to total fraud score
-  meta?: Record<string, unknown>;
-}
-
-export interface FanDecision {
-  shouldCharge: boolean;
-  manualReview: boolean;
-  fraudScore: number;     // 0–100
-  signals: FanSignal[];
-  reason: string;
-}
-
-export const FRAUD_THRESHOLD_AUTO_REJECT = 80;
-export const FRAUD_THRESHOLD_MANUAL_REVIEW = 50;
-
-export function decideFan(
-  payload: FanJobPayload,
-  ctx: FanStreamContext,
-): FanDecision {
-  if (ctx.charged) {
-    return mk(false, false, 0, [], 'already_charged');
-  }
-  if (ctx.flaggedAbuse) {
-    return mk(false, true, 100, [{ type: 'previously_flagged', severity: 100 }], 'flagged_abuse');
-  }
-  if (ctx.ticks.length < 3) {
-    return mk(false, false, 0, [], 'insufficient_ticks');
-  }
-  if (ctx.activeMs < 30_000) {
-    return mk(false, false, 0, [], 'below_min_active_time');
-  }
-
-  const requiredSec = ctx.durationSeconds * 0.25;
-  const maxPosition = ctx.ticks.reduce((m, t) => Math.max(m, t.positionSec), 0);
-  if (maxPosition < requiredSec) {
-    return mk(false, false, 0, [], 'position_below_threshold');
-  }
-
-  const signals: FanSignal[] = [];
-
-  // ─── Loop play (re-entering threshold region from end) ────────
-  const loopedTicks = ctx.ticks.filter((t) => t.wasLooped).length;
-  if (loopedTicks > 0) {
-    signals.push({ type: 'loop_play', severity: Math.min(40, 10 * loopedTicks) });
-  }
-
-  // ─── Muted playback ────────────────────────────────────────────
-  const mutedTicks = ctx.ticks.filter((t) => t.wasMuted).length;
-  if (mutedTicks > ctx.ticks.length * 0.5) {
-    signals.push({ type: 'muted_play', severity: 35, meta: { ratio: mutedTicks / ctx.ticks.length } });
-  }
-  // Sustained volume < 0.05 with >5 ticks
-  const lowVolTicks = ctx.ticks.filter(
-    (t) => t.audioElementVolume !== null && t.audioElementVolume !== undefined && t.audioElementVolume < 0.05,
-  ).length;
-  if (lowVolTicks > 5) {
-    signals.push({ type: 'low_volume_sustained', severity: 15 });
-  }
-
-  // ─── Hidden / background tab ───────────────────────────────────
-  const hiddenTicks = ctx.ticks.filter((t) => t.wasHidden).length;
-  if (hiddenTicks > ctx.ticks.length * 0.6) {
-    signals.push({ type: 'hidden_play', severity: 30, meta: { ratio: hiddenTicks / ctx.ticks.length } });
-  }
-
-  // ─── Seek abuse ────────────────────────────────────────────────
-  if (ctx.largeSeekCount > 2) {
-    signals.push({ type: 'seek_abuse', severity: Math.min(50, 12 * ctx.largeSeekCount) });
-  }
-
-  // ─── Position lie (pos delta vs elapsed) ───────────────────────
-  // (basic check; deeper check is in the realtime layer)
-  let positionLies = 0;
-  for (let i = 1; i < ctx.ticks.length; i++) {
-    const prev = ctx.ticks[i - 1]!;
-    const cur = ctx.ticks[i]!;
-    const elapsed = (cur.monotonicMs - prev.monotonicMs) / 1000;
-    const delta = cur.positionSec - prev.positionSec;
-    if (delta > elapsed * 1.2 + 0.5) positionLies++;
-  }
-  if (positionLies > 0) {
-    signals.push({ type: 'position_lie', severity: Math.min(40, 10 * positionLies) });
-  }
-
-  // ─── Farm pattern: streams-per-hour ────────────────────────────
-  if (ctx.userHistory.streamsLast1h > 8) {
-    signals.push({
-      type: 'farm_pattern',
-      severity: Math.min(60, (ctx.userHistory.streamsLast1h - 8) * 6),
-      meta: { streamsLast1h: ctx.userHistory.streamsLast1h },
-    });
-  } else if (ctx.userHistory.streamsLast1h > 4) {
-    signals.push({ type: 'elevated_volume', severity: 10, meta: { streamsLast1h: ctx.userHistory.streamsLast1h } });
-  }
-
-  // ─── Device repetition ─────────────────────────────────────────
-  if (ctx.deviceFingerprintUserCount > 1) {
-    signals.push({
-      type: 'device_repeat',
-      severity: Math.min(40, 15 * ctx.deviceFingerprintUserCount),
-      meta: { sharedUserCount: ctx.deviceFingerprintUserCount },
-    });
-  }
-
-  // ─── IP repetition (very rough; reverse proxies confound this) ─
-  if (ctx.userHistory.uniqueIpsLast7d > 4) {
-    signals.push({
-      type: 'ip_repeat',
-      severity: Math.min(30, 6 * ctx.userHistory.uniqueIpsLast7d),
-    });
-  }
-
-  // ─── Concurrent streams ────────────────────────────────────────
-  if (ctx.hasRecentConcurrentStream) {
-    signals.push({ type: 'concurrent_stream', severity: 25 });
-  }
-
-  // ─── New account + high volume ─────────────────────────────────
-  if (ctx.userHistory.accountAgeDays < 1 && ctx.userHistory.streamsLast24h > 5) {
-    signals.push({ type: 'new_account_high_volume', severity: 25 });
-  }
-
-  // ─── Sum ───────────────────────────────────────────────────────
-  const fraudScore = Math.min(
-    100,
-    signals.reduce((s, sig) => s + sig.severity, 0),
-  );
-
-  if (fraudScore >= FRAUD_THRESHOLD_AUTO_REJECT) {
-    return mk(false, false, fraudScore, signals, 'auto_reject_fraud');
-  }
-  if (fraudScore >= FRAUD_THRESHOLD_MANUAL_REVIEW) {
-    return mk(false, true, fraudScore, signals, 'manual_review');
-  }
-
-  return mk(true, false, fraudScore, signals, 'eligible');
-}
-
-function mk(
-  shouldCharge: boolean,
-  manualReview: boolean,
-  fraudScore: number,
-  signals: FanSignal[],
-  reason: string,
-): FanDecision {
-  return { shouldCharge, manualReview, fraudScore, signals, reason };
 }
