@@ -615,32 +615,75 @@ model ManualReview {
 // ════════════════════════════════════════════════════════════════════
 
 model OtpCode {
-  id          String    @id @default(cuid())
-  userId      String?
-  user        User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  email       String
-  codeHash    String    // bcrypt hash of the OTP code
-  expiresAt   DateTime
-  consumedAt  DateTime?
-  attempts    Int       @default(0)
-  createdAt   DateTime  @default(now())
+  id           String    @id @default(cuid())
+  userId       String?
+  user         User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  email        String
+  // Phase 3: Argon2id hash of the OTP code; salt is part of the encoded string.
+  // Plaintext OTP is NEVER persisted.
+  codeHash     String
+  expiresAt    DateTime
+  consumedAt   DateTime?
+  attemptsUsed Int       @default(0)
+  maxAttempts  Int       @default(5)
+  // Purpose: 'sign_in' (default) | 'reset_password' | 'wallet_recovery' | 'artist_upgrade'
+  purpose      String    @default("sign_in")
+  // IP and UA captured at request time for risk scoring
+  requestIp    String?
+  requestUserAgent String?
+  requestIpHash    String?
+  // Marked invalid on success
+  invalidated  Boolean   @default(false)
+  createdAt    DateTime  @default(now())
 
   @@index([email, createdAt(sort: Desc)])
   @@index([expiresAt])
+  @@index([purpose, email, createdAt])
 }
 
 model Session {
-  id          String    @id @default(cuid())
-  userId      String
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  csrfToken   String    // random, used in double-submit cookie
-  userAgent   String?
-  ipAddress   String?
-  expiresAt   DateTime
-  revokedAt   DateTime?
-  createdAt   DateTime  @default(now())
-  lastSeenAt  DateTime  @default(now())
+  id                 String    @id @default(cuid())
+  userId             String
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  csrfToken          String    // double-submit cookie value
+  // Hashed — raw token never stored. Cookie carries the raw token, server hashes + looks up.
+  sessionTokenHash   String    @unique
+  deviceFingerprint  String?
+  ipHash             String?   // SHA-256(ip) — never store raw IP in sessions
+  userAgent          String?
+  // Lifecycle
+  issuedAt           DateTime  @default(now())
+  expiresAt          DateTime  // 30 days from issue
+  lastSeenAt         DateTime  @default(now())
+  // 14-day inactivity timeout enforced on each request
+  inactivityExpiresAt DateTime
+  revokedAt          DateTime?
+  revokedReason      String?   // logout | admin_revoke | password_reset | suspicion
 
   @@index([userId])
   @@index([expiresAt])
+  @@index([inactivityExpiresAt])
+  @@index([sessionTokenHash])
+}
+
+// AuthEvent — anti-abuse log. Drives AuthRiskScore.
+model AuthEvent {
+  id          String   @id @default(cuid())
+  userId      String?
+  email       String?
+  // Type: otp_requested | otp_delivered | otp_failed | otp_verified |
+  //       otp_rate_limited | disposable_email_blocked |
+  //       repeated_otp_requests | multiple_emails_same_ip |
+  //       otp_brute_force | session_created | session_revoked | cooldown_applied
+  type        String
+  // Severity 0–100; aggregated to AuthRiskScore per IP/email.
+  severity    Int      @default(0)
+  ipHash      String?
+  userAgent   String?
+  meta        Json?
+  createdAt   DateTime @default(now())
+
+  @@index([email, type, createdAt(sort: Desc)])
+  @@index([ipHash, type, createdAt(sort: Desc)])
+  @@index([type, createdAt(sort: Desc)])
 }

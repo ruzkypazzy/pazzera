@@ -15,6 +15,8 @@ export const QUEUE_NAMES = {
   paymentSettle: 'payment:settle',
   streamMonitor: 'stream:monitor',
   walletIndexer: 'wallet:indexer',
+  walletProvision: 'wallet:provision',
+  authCleanup: 'auth:cleanup',
   maintenance: 'maintenance',
   analyticsRollup: 'analytics:rollup',
 } as const;
@@ -40,6 +42,16 @@ export interface DiscoveryJobPayload {
   type: 'rebuild_for_user' | 'rebuild_global' | 'on_stream_complete' | 'on_song_publish';
   userId?: string;
   songId?: string;
+}
+
+export interface WalletProvisionJobPayload {
+  userId: string;
+  /** Retry count — if this fails repeatedly we mark the wallet as `recovery_requested`. */
+  attempt: number;
+}
+
+export interface AuthCleanupJobPayload {
+  task: 'expire_otps' | 'expire_sessions' | 'gc_auth_events';
 }
 
 export interface PaymentSettleJobPayload {
@@ -132,6 +144,10 @@ export const enqueue = {
     }),
   walletIndexer: (payload: WalletIndexerJobPayload, opts?: JobsOptions) =>
     getQueue(QUEUE_NAMES.walletIndexer).add('wallet.index', payload, opts),
+  walletProvision: (payload: WalletProvisionJobPayload, opts?: JobsOptions) =>
+    getQueue(QUEUE_NAMES.walletProvision).add('wallet.provision', payload, opts),
+  authCleanup: (payload: AuthCleanupJobPayload, opts?: JobsOptions) =>
+    getQueue(QUEUE_NAMES.authCleanup).add(payload.task, payload, opts),
   maintenance: (payload: MaintenanceJobPayload, opts?: JobsOptions) =>
     getQueue(QUEUE_NAMES.maintenance).add(payload.task, payload, opts),
   analyticsRollup: (payload: MaintenanceJobPayload, opts?: JobsOptions) =>

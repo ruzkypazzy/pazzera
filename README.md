@@ -79,10 +79,10 @@ See [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md) — covers Docker, Nginx, Let's
 |---|---|---|
 | 1 | Architecture & scaffolding | ✅ done |
 | 2 | Database schema + migrations + repos + seed | ✅ done |
-| 3 | Auth (Resend OTP, sessions) | ⏳ |
-| 4 | Wallet creation + encryption | ⏳ |
-| 5 | Frontend UI | ⏳ |
-| 6 | Upload pipeline (R2, metadata) | ⏳ |
+| 3 | Auth (OTP, sessions, CSRF, rate limit, risk score, UI) | ✅ done |
+| 4 | Wallet creation + encryption (Circle W3S real integration) | ⏳ |
+| 5 | Frontend UI (dashboards, library, artist, song, wallet, admin, profile) | ⏳ |
+| 6 | Upload pipeline (R2, metadata, waveform) | ⏳ |
 | 7 | AI agents (Curator / Fan / Split / Discovery) | ⏳ |
 | 8 | Streaming engine (Socket.IO) | ⏳ |
 | 9 | Nano payment (Arc + x402 + Circle) | ⏳ |

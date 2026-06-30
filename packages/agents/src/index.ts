@@ -16,3 +16,5 @@ export * from './workers/curator-worker';
 export * from './workers/fan-worker';
 export * from './workers/split-worker';
 export * from './workers/discovery-worker';
+export * from './workers/wallet-provision-worker';
+export * from './workers/auth-cleanup-worker';

@@ -14,7 +14,13 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
+  "devDependencies": {
+    "pino-pretty": "^11.2.1",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  }
   "dependencies": {
+    "hash-wasm": "^4.11.0",
     "ioredis": "^5.4.1",
     "pino": "^9.2.0",
     "rate-limiter-flexible": "^5.0.4",
