@@ -81,7 +81,7 @@ See [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md) — covers Docker, Nginx, Let's
 | 2 | Database schema + migrations + repos + seed | ✅ done |
 | 3 | Auth (OTP, sessions, CSRF, rate limit, risk score, UI) | ✅ done |
 | 4 | Wallet (provider abstraction, v2 encryption, indexer, recovery, UI, integration test) | ✅ done |
-| 5 | Frontend UI (dashboards, library, artist, song, wallet, admin, profile) | ⏳ |
+| 5 | Frontend UI (all pages, design tokens, demo mode, live payment toasts) | ✅ done |
 | 6 | Upload pipeline (R2, metadata, waveform) | ⏳ |
 | 7 | AI agents (Curator / Fan / Split / Discovery) | ⏳ |
 | 8 | Streaming engine (Socket.IO) | ⏳ |

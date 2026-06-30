@@ -112,6 +112,12 @@ const schema = z.object({
 
   // Observability (optional)
   SENTRY_DSN: z.string().optional(),
+
+  // Demo mode (Phase 5) — hackathon-friendly preloaded data
+  DEMO_MODE: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true' || v === '1'),
 });
 
 // Cross-field validation: storage vs. R2 credentials
