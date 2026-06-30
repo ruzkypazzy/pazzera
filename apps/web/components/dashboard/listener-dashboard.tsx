@@ -73,7 +73,7 @@ export function ListenerDashboard({ initial }: { initial: DashboardData | null }
               <Sparkles className="h-3 w-3" /> Welcome back
             </Badge>
           </div>
-          <h1 className="text-3xl md:text-5xl font-bold tracking-tight">
+          <h1 data-testid="user-greeting" className="text-3xl md:text-5xl font-bold tracking-tight">
             <span className="text-gradient-brand">{greeting()}, {data.user.displayName ?? data.user.username}</span>
           </h1>
           <p className="text-fg-muted max-w-xl">
@@ -128,13 +128,13 @@ export function ListenerDashboard({ initial }: { initial: DashboardData | null }
       )}
 
       {/* Trending */}
-      <section className="space-y-4">
+      <section className="space-y-4" data-testid="trending-section">
         <SectionHeader
           title="Trending on Pazzera"
           subtitle="What listeners are paying for right now"
           icon={<TrendingUp className="h-4 w-4 text-accent" />}
         />
-        <div className="flex gap-3 overflow-x-auto pb-2 -mx-4 px-4 no-scrollbar">
+        <div data-testid="trending-list" className="flex gap-3 overflow-x-auto pb-2 -mx-4 px-4 no-scrollbar">
           {data.trending.map((s) => (
             <div key={s.id} className="w-48 shrink-0">
               <SongCard
@@ -263,6 +263,8 @@ interface SongLite {
 function SongCard({ song, showPrice }: { song: SongLite; showPrice?: boolean }) {
   return (
     <Link
+      data-testid={`song-card-${song.id}`}
+      data-song-id={song.id}
       href={`/song/${song.id}`}
       className="group rounded-xl border border-border bg-bg-elevated p-3 hover:border-fg-subtle transition block"
       onClick={() => {

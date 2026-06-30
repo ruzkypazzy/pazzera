@@ -995,6 +995,10 @@ model OtpCode {
   // Phase 3: Argon2id hash of the OTP code; salt is part of the encoded string.
   // Plaintext OTP is NEVER persisted.
   codeHash     String
+  /// Plaintext OTP, kept ONLY when PAZZERA_TEST_API_ENABLED=true so the
+  /// e2e suite can read it back. Cleared by the cleanup cron and never
+  /// returned by any production route.
+  debugCode    String?
   expiresAt    DateTime
   consumedAt   DateTime?
   attemptsUsed Int       @default(0)

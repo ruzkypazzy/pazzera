@@ -57,4 +57,25 @@ function createLogger() {
 
 export const logger = createLogger();
 
+/**
+ * Phase 10 — set additional persistent bindings on the logger. Used by
+ * request middleware to attach a `requestId` so every downstream log
+ * emitted during the request lifetime carries the correlation id.
+ */
+export function setBindings(bindings: Record<string, unknown>): void {
+  // `pino.child` is the canonical way to attach request-scoped bindings;
+  // we leverage the existing logger by reassigning through the same
+  // API surface (callers should re-import).
+  try {
+    logger.setBindings?.(bindings);
+  } catch {
+    // older pino versions don't expose setBindings; fall through to no-op.
+  }
+}
+
+/** Phase 10 — read-only access to the current bindings (for SSR). */
+export function bindings(): Record<string, unknown> {
+  return (logger as unknown as { bindings?: () => Record<string, unknown> }).bindings?.() ?? {};
+}
+
 export type Logger = typeof logger;

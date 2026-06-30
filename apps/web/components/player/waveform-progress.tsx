@@ -28,6 +28,12 @@ interface WaveformProgressProps {
   compact?: boolean;
 }
 
+function formatTimecode(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
 export function WaveformProgress({
   peaks,
   durationSec,
@@ -216,6 +222,17 @@ export function WaveformProgress({
           className="absolute top-0 h-full w-px bg-fg-subtle/40 pointer-events-none"
           style={{ left: hoverPct * width, transform: 'translateX(-0.5px)' }}
         />
+      )}
+
+      {/* Hover time tooltip */}
+      {hoverPct !== null && (
+        <div
+          className="absolute top-0 -translate-y-full -translate-x-1/2 rounded-md border border-border bg-bg/95 px-1.5 py-0.5 text-[10px] text-fg-muted shadow pointer-events-none"
+          style={{ left: hoverPct * width }}
+          aria-hidden="true"
+        >
+          {formatTimecode(hoverPct * durationSec)}
+        </div>
       )}
     </div>
   );

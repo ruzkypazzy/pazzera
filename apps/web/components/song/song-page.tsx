@@ -67,6 +67,7 @@ export function SongPage() {
 
           <div className="pt-2 flex flex-wrap items-center gap-3">
             <Button
+              data-testid="play-button"
               size="lg"
               onClick={() => {
                 setPlaying((p) => !p);

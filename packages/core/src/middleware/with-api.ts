@@ -41,7 +41,12 @@ export function withApi<TParams = unknown>(
     req: NextRequest,
     context: { params?: TParams } = {},
   ): Promise<Response> => {
-    const requestId = newRequestId();
+    // Honor upstream correlation IDs (e.g. from the load balancer) so a
+    // Phase 10 trace starts at the edge of the deployment, not at the
+    // Next process. Otherwise mint a fresh one.
+    const requestId =
+      (req.headers.get('x-request-id') ?? req.headers.get('x-correlation-id')) || newRequestId();
+    logger.setBindings({ requestId });
     const start = Date.now();
 
     const respond = (body: unknown, status: number, extra?: HeadersInit) => {

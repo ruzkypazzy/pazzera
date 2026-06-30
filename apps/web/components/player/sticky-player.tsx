@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
-import { Play, Pause, SkipBack, SkipForward, Volume2, Repeat, Shuffle, Repeat1 } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Volume2, Repeat, Shuffle, Repeat1, ListMusic } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { usePlayerQueue, type QueuedSong } from '@/lib/player-queue';
 import {
@@ -67,6 +67,7 @@ export function StickyPlayer() {
   const [thresholdReached, setThresholdReached] = useState(false);
   const [paymentDuePending, setPaymentDuePending] = useState<{ amount: string; nonce: string; streamId: string } | null>(null);
   const [paymentSettledFlash, setPaymentSettledFlash] = useState<{ txHash?: string } | null>(null);
+  const [queueOpen, setQueueOpen] = useState(false);
   const bufferedRef = useRef(0);
 
   const current = queue.queue[queue.currentIndex] ?? null;
@@ -259,14 +260,16 @@ export function StickyPlayer() {
   return (
     <>
       <audio ref={audioRef} preload="metadata" muted={muted} />
+      <span data-testid="song-id" className="sr-only">{track.songId}</span>
       <div
         className={cn(
           'pointer-events-auto fixed inset-x-0 bottom-0 z-30 border-t border-border bg-bg/95 backdrop-blur-xl',
+          'pb-[env(safe-area-inset-bottom)]',
           track.songId ? 'opacity-100' : 'pointer-events-none opacity-50',
         )}
       >
-        <div className="mx-auto flex max-w-[1400px] items-center gap-3 px-4 py-2">
-          <div className="flex w-64 items-center gap-3 min-w-0">
+        <div className="mx-auto flex max-w-[1400px] items-center gap-2 px-3 py-2 sm:gap-3 sm:px-4 md:py-3">
+          <div className="hidden w-64 items-center gap-3 min-w-0 sm:flex">
             <div className="h-12 w-12 flex-shrink-0 overflow-hidden rounded-md bg-bg-muted">
               {track.coverUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -285,7 +288,20 @@ export function StickyPlayer() {
 
           {/* Center: controls + waveform */}
           <div className="flex flex-1 flex-col gap-1">
-            <div className="flex items-center justify-center gap-2">
+            <div className="flex items-center justify-center gap-1 sm:gap-2">
+              <button
+                onClick={() => setQueueOpen((v) => !v)}
+                aria-label={queueOpen ? 'Close queue' : 'Open queue'}
+                aria-expanded={queueOpen}
+                data-testid="queue-toggle"
+                className={cn(
+                  'rounded-md p-1.5 text-fg-muted transition hover:text-fg md:hidden',
+                  queueOpen && 'text-accent',
+                )}
+                title="Queue"
+              >
+                <ListMusic className="h-3.5 w-3.5" />
+              </button>
               <button
                 onClick={() => queue.toggleShuffle()}
                 aria-label="Shuffle"
@@ -343,7 +359,10 @@ export function StickyPlayer() {
           {/* Right: volume + price */}
           <div className="flex w-44 items-center justify-end gap-3">
             {paymentDuePending && (
-              <span className="inline-flex items-center gap-1 rounded-md bg-accent/15 px-2 py-0.5 text-[11px] text-accent border border-accent/30">
+              <span
+                data-testid="payment-due-toast"
+                className="inline-flex items-center gap-1 rounded-md bg-accent/15 px-2 py-0.5 text-[11px] text-accent border border-accent/30"
+              >
                 <span className="relative flex h-1.5 w-1.5">
                   <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent/60" />
                   <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-accent" />
@@ -352,7 +371,10 @@ export function StickyPlayer() {
               </span>
             )}
             {paymentSettledFlash && (
-              <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-2 py-0.5 text-[11px] text-emerald-400 border border-emerald-400/30">
+              <span
+                data-testid="payment-settled-toast"
+                className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-2 py-0.5 text-[11px] text-emerald-400 border border-emerald-400/30"
+              >
                 ✓ paid
               </span>
             )}
@@ -385,6 +407,66 @@ export function StickyPlayer() {
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
               </span>
               Payment due: {paymentDuePending.amount} USDC
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Queue drawer — mobile-friendly, slides up from the sticky player. */}
+      <AnimatePresence>
+        {queueOpen && (
+          <motion.div
+            key="queue-drawer"
+            initial={{ y: '100%' }}
+            animate={{ y: 0 }}
+            exit={{ y: '100%' }}
+            transition={{ type: 'spring', damping: 30, stiffness: 280 }}
+            className="fixed inset-x-0 bottom-20 z-40 mx-auto max-h-[60vh] max-w-2xl overflow-hidden rounded-t-2xl border border-border bg-bg/95 backdrop-blur-xl"
+            data-testid="queue-drawer"
+            role="dialog"
+            aria-label="Up next"
+          >
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <h3 className="text-sm font-medium">Up next ({queue.queue.length})</h3>
+              <button
+                onClick={() => setQueueOpen(false)}
+                aria-label="Close queue"
+                className="rounded-md p-1 text-fg-muted hover:text-fg"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="max-h-[50vh] overflow-y-auto px-2 py-2">
+              {queue.queue.length === 0 ? (
+                <p className="px-2 py-6 text-center text-sm text-fg-muted">Queue is empty.</p>
+              ) : (
+                queue.queue.map((q, idx) => (
+                  <div
+                    key={`${q.id}-${idx}`}
+                    className="flex items-center gap-3 rounded-md px-2 py-2 hover:bg-bg-muted"
+                  >
+                    <span className="w-6 text-center text-xs text-fg-muted">{idx + 1}</span>
+                    <img
+                      src={q.coverUrl ?? ''}
+                      alt=""
+                      className="h-9 w-9 flex-shrink-0 rounded object-cover"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm">{q.title}</p>
+                      <p className="truncate text-xs text-fg-muted">{q.artistName}</p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        queue.removeAt(idx);
+                      }}
+                      className="rounded p-1 text-xs text-fg-muted hover:text-danger"
+                      aria-label="Remove from queue"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))
+              )}
             </div>
           </motion.div>
         )}

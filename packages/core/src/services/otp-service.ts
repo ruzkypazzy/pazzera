@@ -64,6 +64,10 @@ export async function requestOtp(input: RequestOtpInput): Promise<RequestOtpResu
       userId: user?.id,
       email,
       codeHash,
+      // The cleartext OTP is only persisted in non-production test mode.
+      // Production callers will always see `debugCode` returned as null
+      // and the e2e suite reads it back via /api/auth/test-otp.
+      debugCode: process.env.NODE_ENV !== 'production' && process.env.PAZZERA_TEST_API_ENABLED === 'true' ? code : null,
       expiresAt,
       purpose,
       maxAttempts: MAX_OTP_ATTEMPTS,

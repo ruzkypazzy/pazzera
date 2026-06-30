@@ -159,7 +159,7 @@ export function AdminDashboard() {
       </header>
 
       {/* Platform metrics */}
-      <section className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+      <section data-testid="overview-card" className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <Kpi label="Total users" value={String(data.metrics.totalUsers)} icon={<Users className="h-4 w-4 text-accent" />} />
         <Kpi label="Artists" value={String(data.metrics.artists)} icon={<Music className="h-4 w-4 text-accent" />} />
         <Kpi label="Streams (24h)" value={String(data.metrics.streamsToday)} icon={<Activity className="h-4 w-4 text-accent" />} />
@@ -174,6 +174,7 @@ export function AdminDashboard() {
           title="Agent decisions (explainable)"
           subtitle="Click any decision for the full transparency card"
           className="lg:col-span-2"
+          data-testid="agent-health-card"
         >
           <div className="space-y-1.5 max-h-[480px] overflow-y-auto pr-2">
             {data.decisions.map((d) => {
@@ -436,20 +437,24 @@ function Kpi({ label, value, icon, highlight }: { label: string; value: string; 
   );
 }
 
-function Card({ icon, title, subtitle, children, className, highlight }: {
+function Card({ icon, title, subtitle, children, className, highlight, 'data-testid': dataTestid }: {
   icon: React.ReactNode;
   title: string;
   subtitle?: string;
   children: React.ReactNode;
   className?: string;
   highlight?: boolean;
+  'data-testid'?: string;
 }) {
   return (
-    <div className={cn(
-      'rounded-2xl border bg-bg-elevated/60 p-4',
-      highlight ? 'border-danger/30' : 'border-border',
-      className,
-    )}>
+    <div
+      data-testid={dataTestid}
+      className={cn(
+        'rounded-2xl border bg-bg-elevated/60 p-4',
+        highlight ? 'border-danger/30' : 'border-border',
+        className,
+      )}
+    >
       <div className="mb-3">
         <div className="flex items-center gap-2">
           {icon}
@@ -600,7 +605,7 @@ function StreamingHealthCard() {
     );
   }
   return (
-    <Card icon={<Activity className="h-4 w-4 text-accent" />} title="Streaming health (Phase 8)">
+    <Card icon={<Activity className="h-4 w-4 text-accent" />} title="Streaming health (Phase 8)" data-testid="streaming-health-card">
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
         <Stat label="Active streams" value={String(h.activeStreams)} />
         <Stat label="Listeners (5m)" value={String(h.uniqueListenersLast5Min)} />
