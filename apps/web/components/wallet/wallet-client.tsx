@@ -52,6 +52,36 @@ export function WalletClient() {
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [withdrawResult, setWithdrawResult] = useState<string | null>(null);
 
+  // Backup / Export
+  const [exportConfirm, setExportConfirm] = useState('');
+  const [exportResult, setExportResult] = useState<{ privateKey?: string; address?: string; warning?: string; message?: string } | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportErr, setExportErr] = useState<string | null>(null);
+
+  async function exportKey() {
+    if (exportConfirm !== 'I understand') return;
+    setExporting(true);
+    setExportErr(null);
+    try {
+      const r = await fetch('/api/wallet/export', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ confirm: 'I understand' }),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        setExportErr(data?.error?.message || 'Export failed');
+      } else {
+        setExportResult(data);
+      }
+    } catch (e) {
+      setExportErr((e as Error).message);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   async function loadAll() {
     const [w, d, t] = await Promise.all([
       fetch('/api/wallet/balance?refresh=1').then((r) => r.json()),
@@ -147,35 +177,6 @@ export function WalletClient() {
     );
   }
 
-  const [exportConfirm, setExportConfirm] = useState('');
-  const [exportResult, setExportResult] = useState<{ privateKey?: string; address?: string; warning?: string; message?: string } | null>(null);
-  const [exporting, setExporting] = useState(false);
-  const [exportErr, setExportErr] = useState<string | null>(null);
-
-  async function exportKey() {
-    if (exportConfirm !== 'I understand') return;
-    setExporting(true);
-    setExportErr(null);
-    try {
-      const r = await fetch('/api/wallet/export', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ confirm: 'I understand' }),
-      });
-      const data = await r.json();
-      if (!r.ok) {
-        setExportErr(data?.error?.message || 'Export failed');
-      } else {
-        setExportResult(data);
-      }
-    } catch (e) {
-      setExportErr((e as Error).message);
-    } finally {
-      setExporting(false);
-    }
-  }
-
   return (
     <div className="space-y-6">
       {/* Balance card */}
@@ -199,7 +200,6 @@ export function WalletClient() {
           </div>
         </div>
       </section>
-
       {/* Backup / Export */}
       <section className="rounded-2xl border border-border bg-bg-elevated p-6">
         <div className="flex items-start justify-between gap-4">
