@@ -147,6 +147,35 @@ export function WalletClient() {
     );
   }
 
+  const [exportConfirm, setExportConfirm] = useState('');
+  const [exportResult, setExportResult] = useState<{ privateKey?: string; address?: string; warning?: string; message?: string } | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportErr, setExportErr] = useState<string | null>(null);
+
+  async function exportKey() {
+    if (exportConfirm !== 'I understand') return;
+    setExporting(true);
+    setExportErr(null);
+    try {
+      const r = await fetch('/api/wallet/export', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ confirm: 'I understand' }),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        setExportErr(data?.error?.message || 'Export failed');
+      } else {
+        setExportResult(data);
+      }
+    } catch (e) {
+      setExportErr((e as Error).message);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Balance card */}
@@ -169,6 +198,84 @@ export function WalletClient() {
             <div>Daily x402 cap: <span className="text-fg">{wallet.x402DailyCapUsdc} USDC</span></div>
           </div>
         </div>
+      </section>
+
+      {/* Backup / Export */}
+      <section className="rounded-2xl border border-border bg-bg-elevated p-6">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold">Backup & export</h2>
+            <p className="text-sm text-fg-muted mt-1 max-w-prose">
+              {wallet.custody === 'user'
+                ? 'Your wallet is user-controlled. Use this section to download a one-time copy of your private key so you can recover the wallet from MetaMask or any other EVM tool.'
+                : 'This wallet is provisioned in Pazzera\u2019s local dev mode — the private key is encrypted on the server. You can export it once below and import it into MetaMask to take self-custody.'}
+            </p>
+          </div>
+        </div>
+
+        {!exportResult ? (
+          <div className="mt-5 space-y-3">
+            <label className="block text-sm">
+              <span className="text-fg-muted">
+                Type <span className="font-mono text-fg">I understand</span> to reveal your private key:
+              </span>
+              <Input
+                type="text"
+                value={exportConfirm}
+                onChange={(e) => setExportConfirm(e.target.value)}
+                placeholder="I understand"
+                className="mt-2"
+              />
+            </label>
+            {exportErr && (
+              <div className="text-sm text-danger">{exportErr}</div>
+            )}
+            <Button
+              type="button"
+              onClick={exportKey}
+              disabled={exporting || exportConfirm !== 'I understand'}
+              variant="secondary"
+            >
+              {exporting ? 'Revealing…' : 'Reveal private key'}
+            </Button>
+            <p className="text-xs text-fg-muted">
+              The key is decrypted from Pazzera\u2019s encrypted store, sent over TLS, and never logged.
+              Once you close this page we can\u2019t show it again — save it somewhere safe.
+            </p>
+          </div>
+        ) : (
+          <div className="mt-5 space-y-3">
+            {exportResult.privateKey ? (
+              <>
+                <div className="text-sm text-fg-muted">Address</div>
+                <div className="font-mono text-xs break-all bg-bg p-3 rounded-lg border border-border">
+                  {exportResult.address}
+                </div>
+                <div className="text-sm text-fg-muted mt-3">Private key</div>
+                <div className="font-mono text-xs break-all bg-bg p-3 rounded-lg border border-danger/40 text-danger select-all">
+                  {exportResult.privateKey}
+                </div>
+              </>
+            ) : (
+              <div className="rounded-lg border border-accent/40 bg-accent/10 p-4 text-sm text-fg">
+                {exportResult.message}
+              </div>
+            )}
+            {exportResult.warning && (
+              <p className="text-xs text-danger">{exportResult.warning}</p>
+            )}
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                setExportResult(null);
+                setExportConfirm('');
+              }}
+            >
+              Done
+            </Button>
+          </div>
+        )}
       </section>
 
       {/* Deposit panel */}
