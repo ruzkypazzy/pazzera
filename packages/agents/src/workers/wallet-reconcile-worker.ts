@@ -43,7 +43,7 @@ function usdcDiffUsdc(a: string, b: string): string {
 
 export async function runWalletReconcileWorker() {
   const worker = new Worker(
-    'wallet:reconcile',
+    QUEUE_NAMES.walletReconcile,
     async (job: Job) => {
       logger.info({ jobId: job.id }, 'wallet_reconcile:start');
       const provider = getActiveProvider();
