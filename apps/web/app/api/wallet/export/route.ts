@@ -18,7 +18,7 @@
  */
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
-import { withApi, prisma, getEnv, AuthError, ValidationError } from '@pazzera/core';
+import { withApi, prisma, getEnv, AuthError, ValidationError, getParsedBody } from '@pazzera/core';
 import { decryptAndMigrate } from '@pazzera/blockchain';
 
 // Accept the confirmation phrase with some forgiveness: trim, collapse
@@ -38,7 +38,7 @@ export const dynamic = 'force-dynamic';
 
 export const POST = withApi<{ userId: string }>(
   async ({ req, userId }) => {
-    const body = await req.json().catch(() => ({}));
+    const body = getParsedBody<{ confirm?: string }>(req);
     const parsed = Body.safeParse(body);
     if (!parsed.success) {
       throw new ValidationError('You must type "I understand" to export the private key.', { issues: parsed.error.issues });

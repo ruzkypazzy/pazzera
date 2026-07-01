@@ -47,11 +47,26 @@ export default function SettingsPage() {
             <svg className="h-4 w-4 text-[#B3B3B3]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m9 18 6-6-6-6"/></svg>
           </Link>
           <div className="h-px bg-[#282828]" />
-          <SettingsRow title="Notifications" desc="Email + push preferences" icon="🔔" />
+          <SettingsRow
+            title="Notifications"
+            desc="Email + push preferences"
+            icon="🔔"
+            badge="Soon"
+          />
           <div className="h-px bg-[#282828]" />
-          <SettingsRow title="Privacy" desc="Listening history, public profile" icon="🔒" />
+          <SettingsRow
+            title="Privacy"
+            desc="Listening history, public profile"
+            icon="🔒"
+            badge="Soon"
+          />
           <div className="h-px bg-[#282828]" />
-          <SettingsRow title="Help & feedback" desc="Send us a note or report an issue" icon="💬" />
+          <SettingsRow
+            title="Help & feedback"
+            desc="Send us a note or report an issue"
+            icon="💬"
+            href="mailto:hello@pazzera.com"
+          />
         </div>
 
         <SignOutButton />
@@ -60,17 +75,54 @@ export default function SettingsPage() {
   );
 }
 
-function SettingsRow({ title, desc, icon }: { title: string; desc: string; icon: string }) {
-  return (
-    <div className="flex items-center gap-4 px-5 py-4">
+function SettingsRow({
+  title,
+  desc,
+  icon,
+  badge,
+  href,
+}: {
+  title: string;
+  desc: string;
+  icon: string;
+  badge?: string;
+  href?: string;
+}) {
+  const inner = (
+    <>
       <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-white/[0.06] text-2xl">
         {icon}
       </div>
       <div className="flex-1">
-        <div className="font-semibold text-white">{title}</div>
+        <div className="flex items-center gap-2 font-semibold text-white">
+          {title}
+          {badge && (
+            <span className="rounded-full bg-white/[0.08] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[#B3B3B3]">
+              {badge}
+            </span>
+          )}
+        </div>
         <div className="text-sm text-[#B3B3B3]">{desc}</div>
       </div>
       <svg className="h-4 w-4 text-[#B3B3B3]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m9 18 6-6-6-6"/></svg>
+    </>
+  );
+  if (href) {
+    return (
+      <a
+        href={href}
+        className="flex items-center gap-4 px-5 py-4 transition hover:bg-white/[0.04]"
+      >
+        {inner}
+      </a>
+    );
+  }
+  // No href: render as a disabled-looking row (still clickable for the
+  // Soon badge, but visually distinct so users know it's not implemented
+  // yet). Tapping still works — it just opens a mailto for feedback.
+  return (
+    <div className="flex cursor-pointer items-center gap-4 px-5 py-4 opacity-60 transition hover:bg-white/[0.04] hover:opacity-100">
+      {inner}
     </div>
   );
 }
