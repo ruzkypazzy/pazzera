@@ -21,8 +21,17 @@ import { z } from 'zod';
 import { withApi, prisma, getEnv, AuthError, ValidationError } from '@pazzera/core';
 import { decryptAndMigrate } from '@pazzera/blockchain';
 
+// Accept the confirmation phrase with some forgiveness: trim, collapse
+// whitespace, and ignore case. The client shows it as 'I understand' but
+// a copy-paste from a rendered <p> could pick up curly quotes or extra
+// spaces. Normalize before validating.
 const Body = z.object({
-  confirm: z.literal('I understand'),
+  confirm: z
+    .string()
+    .transform((s) => s.replace(/\s+/g, ' ').trim().toLowerCase())
+    .refine((s) => s === 'i understand', {
+      message: 'You must type "I understand" to export the private key.',
+    }),
 });
 
 export const dynamic = 'force-dynamic';

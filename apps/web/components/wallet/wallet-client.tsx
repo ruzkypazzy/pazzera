@@ -59,7 +59,8 @@ export function WalletClient() {
   const [exportErr, setExportErr] = useState<string | null>(null);
 
   async function exportKey() {
-    if (exportConfirm !== 'I understand') return;
+    const normalized = exportConfirm.replace(/\s+/g, ' ').trim().toLowerCase();
+    if (normalized !== 'i understand') return;
     setExporting(true);
     setExportErr(null);
     try {
@@ -208,7 +209,7 @@ export function WalletClient() {
             <p className="text-sm text-fg-muted mt-1 max-w-prose">
               {wallet.custody === 'user'
                 ? 'Your wallet is user-controlled. Use this section to download a one-time copy of your private key so you can recover the wallet from MetaMask or any other EVM tool.'
-                : 'This wallet is provisioned in Pazzera\u2019s local dev mode — the private key is encrypted on the server. You can export it once below and import it into MetaMask to take self-custody.'}
+                : "This wallet is provisioned in Pazzera's local dev mode — the private key is encrypted on the server. You can export it once below and import it into MetaMask to take self-custody."}
             </p>
           </div>
         </div>
@@ -233,13 +234,13 @@ export function WalletClient() {
             <Button
               type="button"
               onClick={exportKey}
-              disabled={exporting || exportConfirm !== 'I understand'}
+              disabled={exporting || exportConfirm.replace(/\s+/g, ' ').trim().toLowerCase() !== 'i understand'}
               variant="secondary"
             >
               {exporting ? 'Revealing…' : 'Reveal private key'}
             </Button>
             <p className="text-xs text-fg-muted">
-              The key is decrypted from Pazzera\u2019s encrypted store, sent over TLS, and never logged.
+              The key is decrypted from Pazzera's encrypted store, sent over TLS, and never logged.
               Once you close this page we can\u2019t show it again — save it somewhere safe.
             </p>
           </div>
