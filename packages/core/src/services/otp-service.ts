@@ -94,6 +94,10 @@ export interface VerifyOtpInput {
   purpose?: OtpPurpose;
   ipHash?: string | null;
   userAgent?: string | null;
+  // Optional. For new users, the client may provide a chosen username
+  // (validated + uniqueness-checked). If omitted or invalid, the server
+  // falls back to auto-generating one from the email.
+  username?: string | null;
 }
 
 export interface VerifyOtpResult {
@@ -204,16 +208,52 @@ export async function verifyOtp(
   let isNewUser = false;
   if (otp.userId) {
     userId = otp.userId;
+    // For existing users, let them update their username at sign-in.
+    // Skip if they don't supply one OR if it conflicts with another user.
+    if (input.username) {
+      const candidate = String(input.username).trim().toLowerCase();
+      if (/^[a-z0-9_]{3,20}$/.test(candidate)) {
+        const conflict = await prisma.user.findFirst({
+          where: { username: candidate, NOT: { id: otp.userId } },
+          select: { id: true },
+        });
+        if (!conflict) {
+          await prisma.user.update({
+            where: { id: otp.userId },
+            data: { username: candidate },
+          });
+        }
+      }
+    }
   } else {
     // Lazy-create the user
-    const { generateUsernameFromEmail } = await import('../utils/username');
+    const { generateUsernameFromEmail, validateUsername: _validateUsername } = await import('../utils/username');
     const { UserRepo } = await import('@pazzera/db/repositories');
-    let username = generateUsernameFromEmail(email);
-    // Ensure uniqueness (max 5 attempts to dodge the random suffix collision)
-    for (let i = 0; i < 5; i++) {
-      const existing = await prisma.user.findUnique({ where: { username } });
-      if (!existing) break;
-      username = generateUsernameFromEmail(email);
+
+    // Try the client-supplied username first; if it's missing, invalid, or taken,
+    // fall back to auto-generated. The fallback loop is bounded so we can't loop
+    // forever if the client repeatedly sends a bad value.
+    let username: string | null = null;
+    if (input.username) {
+      const candidate = String(input.username).trim().toLowerCase();
+      if (/^[a-z0-9_]{3,20}$/.test(candidate)) {
+        const conflict = await prisma.user.findUnique({ where: { username: candidate } });
+        if (!conflict) username = candidate;
+      }
+    }
+    if (!username) {
+      for (let i = 0; i < 5; i++) {
+        const cand = generateUsernameFromEmail(email);
+        const existing = await prisma.user.findUnique({ where: { username: cand } });
+        if (!existing) {
+          username = cand;
+          break;
+        }
+      }
+      if (!username) {
+        // Last-resort: timestamp suffix
+        username = generateUsernameFromEmail(email) + Date.now().toString(36);
+      }
     }
     const created = await UserRepo.create({ email, username });
     userId = created.id;
