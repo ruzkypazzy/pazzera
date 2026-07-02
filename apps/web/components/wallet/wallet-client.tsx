@@ -220,16 +220,16 @@ export function WalletClient() {
           <div>
             <h2 className="text-lg font-semibold">Backup & export</h2>
             <p className="text-sm text-fg-muted mt-1 max-w-prose">
-              {wallet.custody === 'user'
-                ? 'Your wallet is user-controlled. Use this section to download a one-time copy of your private key so you can recover the wallet from MetaMask or any other EVM tool.'
-                : "This wallet is provisioned in Pazzera's local dev mode — the private key is encrypted on the server. You can export it once below and import it into MetaMask to take self-custody."}
+              {wallet.provider === 'local-dev' || wallet.provider === 'local'
+                ? "This wallet is provisioned in Pazzera's local dev mode — the private key is encrypted on the server. You can export it once below and import it into MetaMask to take self-custody."
+                : 'This wallet is held by Circle (Developer-Controlled). Circle generates the address + key when you sign up; Pazzera never has a raw key to export. To move funds out of Pazzera without continuing to play music, contact support so we can route the withdrawal through Circle Web.'}
             </p>
           </div>
         </div>
 
-        {!exportResult ? (
-          <div className="mt-5 space-y-3">
-            <label className="block text-sm">
+        {wallet.provider === 'local-dev' || wallet.provider === 'local' ? (
+          <>
+            <label className="block text-sm mt-5">
               <span className="text-fg-muted">
                 Type <span className="font-mono text-fg">I understand</span> to reveal your private key:
               </span>
@@ -242,22 +242,33 @@ export function WalletClient() {
               />
             </label>
             {exportErr && (
-              <div className="text-sm text-danger">{exportErr}</div>
+              <div className="text-sm text-danger mt-3">{exportErr}</div>
             )}
             <Button
               type="button"
               onClick={exportKey}
               disabled={exporting || exportConfirm.replace(/\s+/g, ' ').trim().toLowerCase() !== 'i understand'}
               variant="secondary"
+              className="mt-3"
             >
               {exporting ? 'Revealing…' : 'Reveal private key'}
             </Button>
-            <p className="text-xs text-fg-muted">
+            <p className="text-xs text-fg-muted mt-3">
               The key is decrypted from Pazzera's encrypted store, sent over TLS, and never logged.
               Once you close this page we can't show it again — save it somewhere safe.
             </p>
-          </div>
+          </>
         ) : (
+          <div className="mt-5 rounded-xl border border-[#282828] bg-[#0A0A0F] p-4 text-sm text-[#B3B3B3]">
+            Circle holds this wallet. Withdrawal protection: Pazzera has the platform custodianship
+            needed to keep your x402 caps working, but cannot expose a raw private key. We can
+            help you route a withdrawal to any address you control — open a support ticket from
+            the settings panel.
+          </div>
+        )}
+
+        {/* Result block: shown after exportKey() resolves */}
+        {exportResult && (
           <div className="mt-5 space-y-3">
             {exportResult.privateKey ? (
               <>
@@ -269,25 +280,25 @@ export function WalletClient() {
                 <div className="font-mono text-xs break-all bg-bg p-3 rounded-lg border border-danger/40 text-danger select-all">
                   {exportResult.privateKey}
                 </div>
+                {exportResult.warning && (
+                  <p className="text-xs text-danger">{exportResult.warning}</p>
+                )}
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => {
+                    setExportResult(null);
+                    setExportConfirm('');
+                  }}
+                >
+                  Done
+                </Button>
               </>
             ) : (
               <div className="rounded-lg border border-accent/40 bg-accent/10 p-4 text-sm text-fg">
                 {exportResult.message}
               </div>
             )}
-            {exportResult.warning && (
-              <p className="text-xs text-danger">{exportResult.warning}</p>
-            )}
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => {
-                setExportResult(null);
-                setExportConfirm('');
-              }}
-            >
-              Done
-            </Button>
           </div>
         )}
       </section>

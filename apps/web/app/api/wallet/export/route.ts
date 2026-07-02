@@ -63,28 +63,33 @@ export const POST = withApi(
     if (!wallet) {
       throw new ValidationError('No wallet on file for this account.');
     }
+
+    // Pazzera now runs in DCW mode: Circle owns the key, Pazzera signs via
+    // Circle APIs server-side. We never expose a raw private key to the
+    // user. The "reveal" flow returns the custody model + a path forward
+    // (Circle Web SDK for UCW, or a Circle-backed recovery bundle).
     if (wallet.provider !== 'local-dev' && wallet.provider !== 'local') {
-      // Real UCW path — return the Circle recovery bundle instead of a raw key.
       return NextResponse.json({
         ok: true,
         custody: wallet.custody,
         provider: wallet.provider,
         address: wallet.address,
-        // Circle UCW never lets us see the raw key. Surface what we do have.
         message:
-          'This wallet is held by Circle under User-Controlled Wallets (UCW). ' +
-          'Use the Circle Web SDK to recover via PIN/social/email — the platform does not have access to the private key.',
+          'This is a Circle-DCW (Developer-Controlled) wallet — Circle holds ' +
+          'the key. To move funds out of Pazzera you must use the Circle Web ' +
+          'SDK or contact support. Pazzera never has access to export the ' +
+          'raw private key because Circle (the developer-controlled wallet ' +
+          'provider) creates it on our behalf.',
       });
     }
+
     if (!wallet.encryptedPrivateKey) {
       throw new ValidationError('No encrypted key on file for this wallet.');
     }
 
-    // Decrypt with the platform's WALLET_MASTER_KEY + the userId salt.
-    // This is gated by:
-    //   - Auth (requireSession, via withApi)
-    //   - Body confirmation ("I understand")
-    //   - The client only displays the key once and warns the user.
+    // Legacy local-dev path: Pazzera held the encrypted key. Kept for
+    // backwards compat with any rows provisioned before the DCW switch.
+    // New accounts go through the DCW branch above.
     const { key } = decryptAndMigrate(userId, wallet.encryptedPrivateKey);
 
     return NextResponse.json({

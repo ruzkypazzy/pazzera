@@ -38,6 +38,13 @@ import type { Address, Hex } from 'viem';
 export class WalletService {
   /**
    * Provision a wallet for a user. Idempotent.
+   *
+   * The wallet is a Circle DCW (Developer-Controlled Wallet) — Circle
+   * creates and owns the address + signing material. Pazzera never
+   * holds the raw private key; we surface the address and basic
+   * metadata to the user, and any signing happens server-side via
+   * Circle APIs in the higher-level service code paths.
+   *
    * Returns the active Wallet row.
    */
   static async provision(userId: string): Promise<{
@@ -56,49 +63,32 @@ export class WalletService {
       };
     }
 
-    const localProvider = getWalletProvider();
-    const localResult = await localProvider.createWallet({ userId });
-
-    // Phase 9 — also provision through the active Circle provider (real or
-    // mock). This is what gives us the canonical providerWalletId +
-    // providerMetadata for the admin dashboard + Circle webhooks.
+    // DCW: address + walletId come from Circle only. No local keypair
+    // generation, no mock provider — Circle is the source of truth.
     const circle = getCircleProvider();
     const circleResult = await circle.createWallet({
       userId,
       idempotencyKey: `pazzera:provision:${userId}`,
     });
 
-    // Provider name resolution: prefer the legacy `provider.name` shape,
-    // except when running on the real UCW adapter.
-    const activeProviderName =
-      circle.name === 'circle-ucw'
-        ? 'circle-ucw'
-        : (localResult.providerWalletId.startsWith('local-') ? 'local-dev' : localProvider.name);
-
-    // Address resolution: the on-chain address stored on the wallet MUST
-    // match the address the user can derive from the encrypted key we hand
-    // them via /api/wallet/export. We hold the local key, so the address is
-    // the local provider's address. The Circle adapter is only the source
-    // of providerWalletId / custody metadata.
-    //
-    // In Circle UCW mode (real), the platform never sees the key — Circle
-    // holds it — so the Circle address is the truth. Switch on that case.
-    const activeAddress =
-      circle.name === 'circle-ucw'
-        ? (circleResult.address ?? localResult.address)
-        : localResult.address;
+    if (!circleResult.address) {
+      throw new Error('Circle provider did not return an address');
+    }
 
     const env = getEnv();
     const wallet = await prisma.wallet.create({
       data: {
         userId,
-        address: activeAddress,
-        encryptedPrivateKey: localResult.encryptedSecret ?? '',
-        encryptionVersion: 2,
-        keyVersion: 1,
-        provider: activeProviderName,
-        providerWalletId: circleResult.walletId, // canonical Circle id
-        custody: circleResult.custody,
+        address: circleResult.address,
+        // No raw key in storage — Circle holds it. We store an empty
+        // placeholder so any future code paths that try to decrypt will
+        // fail loudly instead of silently using a wrong key.
+        encryptedPrivateKey: '',
+        encryptionVersion: 0,
+        keyVersion: 0,
+        provider: circle.name,
+        providerWalletId: circleResult.walletId,
+        custody: circleResult.custody, // 'platform' for DCW (Pazzera) or 'user' for UCW
         status: 'active',
         balanceUsdc: '0',
         pendingUsdc: '0',
@@ -128,17 +118,18 @@ export class WalletService {
       {
         userId,
         walletId: wallet.id,
-        address: circleResult.address ?? localResult.address,
-        provider: activeProviderName,
+        address: circleResult.address,
+        provider: circle.name,
         circleWalletId: circleResult.walletId,
+        custody: circleResult.custody,
       },
       'wallet:provisioned',
     );
 
     return {
       walletId: wallet.id,
-      address: circleResult.address ?? localResult.address,
-      provider: activeProviderName,
+      address: circleResult.address,
+      provider: circle.name,
       custody: circleResult.custody,
     };
   }
