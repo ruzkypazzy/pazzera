@@ -254,7 +254,9 @@ interface SongLite {
   id: string;
   title: string;
   artist: string;
+  artistUsername?: string;
   coverUrl: string;
+  audioUrl?: string;
   durationSec?: number;
   playCount?: number;
   publishedPriceUsdc?: string;
@@ -272,12 +274,15 @@ function SongCard({ song, showPrice }: { song: SongLite; showPrice?: boolean }) 
           window.dispatchEvent(
             new CustomEvent('pazzera:play', {
               detail: {
-                songId: song.id,
+                id: song.id,
+                slug: song.id, // dashboard cards don't expose slug yet; id is a stable fallback
                 title: song.title,
-                artist: song.artist,
+                artistName: song.artist,
+                artistUsername: song.artistUsername ?? '',
                 coverUrl: song.coverUrl,
-                durationSec: song.durationSec ?? 0,
-                pricePerStream: song.publishedPriceUsdc ?? '0.002',
+                audioUrl: song.audioUrl ?? '',
+                durationSeconds: song.durationSec ?? 0,
+                publishedPriceUsdc: song.publishedPriceUsdc ?? '0.002',
               },
             }),
           );

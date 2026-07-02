@@ -40,6 +40,7 @@ export const GET = withApi(async ({ req }) => {
     JSON.stringify({
       song: {
         id: song.id,
+        slug: song.slug,
         title: song.title,
         artistName: song.artistName,
         artistUsername: song.artistUsername,

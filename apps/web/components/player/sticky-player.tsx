@@ -96,18 +96,40 @@ export function StickyPlayer() {
   }, [playing]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Listen for "pazzera:play" events from song cards (Phase 5 contract) ─
+  // Detail IS the QueuedSong itself (id, slug, title, artistName,
+  // artistUsername, coverUrl, audioUrl, durationSeconds,
+  // publishedPriceUsdc, waveformPeaks?).
   useEffect(() => {
     function onPlay(e: Event) {
-      const ce = e as CustomEvent<{ song: Omit<QueuedSong, 'durationSeconds'> & { durationSeconds: number; pricePerStream: string } }>;
-      const s = ce.detail.song;
+      const ce = e as CustomEvent<QueuedSong>;
+      const s = ce.detail;
+      if (!s || !s.id) return;
+      // Make sure the queued shape matches QueuedSong exactly.
+      const normalized: QueuedSong = {
+        id: s.id,
+        slug: s.slug ?? s.id,
+        title: s.title ?? '',
+        artistName: s.artistName ?? '',
+        artistUsername: s.artistUsername ?? '',
+        coverUrl: s.coverUrl ?? '',
+        audioUrl: s.audioUrl ?? '',
+        durationSeconds: s.durationSeconds ?? 0,
+        publishedPriceUsdc: s.publishedPriceUsdc ?? '0.002',
+        waveformPeaks: s.waveformPeaks ?? null,
+      };
       // Set the queue to this one song if empty
       if (queue.queue.length === 0) {
-        queue.enqueue([s]);
+        queue.enqueue([normalized]);
+        queue.jumpTo(0);
+        return;
       }
       // Find or set current
-      const idx = queue.queue.findIndex((q) => q.id === s.id);
-      if (idx >= 0) queue.jumpTo(idx);
-      else queue.enqueueNext(s);
+      const idx = queue.queue.findIndex((q) => q.id === normalized.id);
+      if (idx >= 0) {
+        queue.jumpTo(idx);
+      } else {
+        queue.enqueueNext(normalized);
+      }
     }
     window.addEventListener('pazzera:play', onPlay as EventListener);
     return () => window.removeEventListener('pazzera:play', onPlay as EventListener);

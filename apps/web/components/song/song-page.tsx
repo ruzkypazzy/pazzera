@@ -10,6 +10,7 @@ import { cn } from '@/lib/cn';
 
 interface SongData {
   id: string;
+  slug: string;
   title: string;
   artistName: string;
   artistUsername: string;
@@ -75,12 +76,15 @@ export function SongPage() {
                   window.dispatchEvent(
                     new CustomEvent('pazzera:play', {
                       detail: {
-                        songId: data.id,
+                        id: data.id,
+                        slug: data.slug ?? data.id,
                         title: data.title,
-                        artist: data.artistName,
+                        artistName: data.artistName,
+                        artistUsername: data.artistUsername ?? '',
                         coverUrl: data.coverUrl,
-                        durationSec: data.durationSeconds,
-                        pricePerStream: data.publishedPriceUsdc,
+                        audioUrl: data.audioUrl,
+                        durationSeconds: data.durationSeconds,
+                        publishedPriceUsdc: data.publishedPriceUsdc,
                       },
                     }),
                   );
