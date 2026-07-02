@@ -284,8 +284,29 @@ export default function UploadPage() {
       return;
     }
     try {
-      // Step 1: upload audio
+      // Step 0: create the song draft (so finalize has a songId)
       setState('uploading-audio');
+      setProgress(5);
+      let songId = uploadedSongId;
+      if (!songId) {
+        const csrf0 = getCookie('csrf');
+        const draftRes = await fetch('/api/songs/create-draft', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-csrf-token': csrf0 },
+          body: JSON.stringify({
+            title: title.trim(),
+            description: description.trim() || undefined,
+          }),
+        });
+        const draftJson = await draftRes.json().catch(() => ({}));
+        if (!draftRes.ok || !draftJson?.id) {
+          throw new Error(draftJson?.error?.message ?? 'Could not create song draft');
+        }
+        songId = draftJson.id as string;
+        setUploadedSongId(songId);
+      }
+
+      // Step 1: upload audio
       setProgress(15);
       const aKey = await uploadOne(audioFile!, 'audio');
       setAudioKey(aKey);
@@ -390,7 +411,7 @@ export default function UploadPage() {
           'x-csrf-token': csrf,
         },
         body: JSON.stringify({
-          songId: uploadedSongId,
+          songId,
           priceUsdc: priceUsdc.toString(),
           metadata: {
             title: title.trim(),
@@ -419,23 +440,8 @@ export default function UploadPage() {
     }
   }
 
-  // Step before finalize: create the song draft so finalize has an `songId`.
-  useEffect(() => {
-    if (state !== 'idle') return;
-    if (uploadedSongId) return;
-    if (!title.trim()) return;
-    fetch('/api/songs/create-draft', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-csrf-token': getCookie('csrf') },
-      body: JSON.stringify({ title: title.trim(), description: description.trim() || undefined }),
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => {
-        if (j?.id) setUploadedSongId(j.id);
-      })
-      .catch(() => undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [title]);
+  // (Draft creation is now done explicitly in submit() so the songId is
+  // always available when finalize runs — no useEffect race.)
 
   return (
     <AppShell>
