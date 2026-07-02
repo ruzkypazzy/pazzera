@@ -47,18 +47,6 @@ export default async function HomePage() {
       isArtist={isArtist}
       isAdmin={isAdmin}
       walletBalance={balanceStr}
-      track={
-        madeForYou
-          ? {
-              id: madeForYou.id,
-              title: madeForYou.title,
-              artistName: madeForYou.artistName,
-              coverUrl: madeForYou.coverUrl ?? null,
-              durationSec: 180,
-              ratePerStreamUsdc: madeForYou.rateUsdc,
-            }
-          : undefined
-      }
     >
       <div className="mx-auto max-w-screen-xl space-y-8 px-4 py-6 md:px-8">
         {/* === HERO === */}
