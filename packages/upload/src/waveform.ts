@@ -56,7 +56,11 @@ export async function generateWaveformPeaks(
     const end = Math.min(start + samplesPerBucket, totalSamples);
     let lo = 32767;
     let hi = -32768;
-    for (let j = start; j < end; j++) {
+    // Guard: an int16 LE read needs offset + 1 <= buffer length. The
+    // math above is correct, but cap `end` defensively to (length-1)/2
+    // to be sure no off-by-one can hit the RangeError.
+    const safeEnd = Math.min(end, (pcm.length - 2) >> 1);
+    for (let j = start; j < safeEnd; j++) {
       const s = pcm.readInt16LE(j * 2);
       if (s < lo) lo = s;
       if (s > hi) hi = s;

@@ -89,11 +89,14 @@ export async function processCover(
 
 async function resize(input: string, output: string, w: number, h: number): Promise<void> {
   try {
+    // ffmpeg 5+ removed the value for `force_original_aspect_ratio`.
+    // The bare flag is equivalent to `=decrease`. To crop instead of
+    // fit, we explicitly chain a `crop` after the scale.
     await execFileP('ffmpeg', [
       '-hide_banner',
       '-loglevel', 'error',
       '-i', input,
-      '-vf', `scale=${w}:${h}:force_original_aspect_ratio=cover,crop=${w}:${h}`,
+      '-vf', `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h}`,
       '-quality', '85',
       '-y', output,
     ], { maxBuffer: 16 * 1024 * 1024 });
