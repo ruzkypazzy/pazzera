@@ -21,12 +21,25 @@ async function loadStreamSignals(streamId: string): Promise<FanInput | null> {
   const stream = await prisma.stream.findUnique({
     where: { id: streamId },
     include: {
-      song: { select: { durationSeconds: true } },
+      song: { select: { durationSeconds: true, artistId: true } },
       user: { select: { id: true, createdAt: true } },
       ticks: true,
     },
   });
   if (!stream) return null;
+
+  // Self-play check: is the listener the primary artist or a royalty
+  // recipient on this song? Skip the charge if so.
+  let selfPlayKind: 'none' | 'primary_artist' | 'featured_recipient' = 'none';
+  if (stream.song?.artistId && stream.song.artistId === stream.userId) {
+    selfPlayKind = 'primary_artist';
+  } else {
+    const recipient = await prisma.royaltyRecipient.findFirst({
+      where: { songId: stream.songId, userId: stream.userId },
+      select: { id: true },
+    });
+    if (recipient) selfPlayKind = 'featured_recipient';
+  }
 
   // Telemetry aggregates from ticks
   const ticks = stream.ticks;
@@ -96,6 +109,7 @@ async function loadStreamSignals(streamId: string): Promise<FanInput | null> {
     userPriorChargesForSongLast24h: priorCharges,
     userAccountAgeDays: accountAgeDays,
     thresholdPct: 25, // matches phase 5 stickyPlayer
+    selfPlayKind,
   };
 }
 
@@ -136,6 +150,19 @@ export async function runFanWorker() {
             paymentTriggerSec: decision.paymentTriggerSec,
           },
         });
+
+        // Increment playCount for any non-fraudulent stream. Self-play
+        // streams still count as plays (the artist was listening) but
+        // are also flagged so the dashboard can show "self-listens".
+        const isCountedPlay =
+          decision.classification !== 'fraudulent_stream' &&
+          decision.classification !== 'suspicious_stream';
+        if (isCountedPlay) {
+          await prisma.song.update({
+            where: { id: input.songId },
+            data: { playCount: { increment: 1 } },
+          });
+        }
 
         if (decision.classification === 'fraudulent_stream' || decision.classification === 'suspicious_stream') {
           await prisma.manualReview.upsert({

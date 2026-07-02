@@ -4,6 +4,13 @@ import { useEffect, useRef, useState } from 'react';
 import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Repeat, Shuffle, Heart, Sparkles, Zap } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useCurrentTrack, type CurrentTrack } from '@/lib/current-track';
+import {
+  startRealtime,
+  end as realtimeEnd,
+  pause as realtimePause,
+  resume as realtimeResume,
+  disconnect as realtimeDisconnect,
+} from '@/lib/realtime-client';
 
 export type Track = {
   id: string;
@@ -43,6 +50,7 @@ export function PlayerBar({
   const [muted, setMuted] = useState(false);
   const [liked, setLiked] = useState(false);
   const [internalIsPlaying, setInternalIsPlaying] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Pull from global current-track store. If a `track` prop is also
@@ -52,6 +60,25 @@ export function PlayerBar({
   const setStoreTrack = useCurrentTrack((s) => s.setTrack);
   const storeIsPlaying = useCurrentTrack((s) => s.isPlaying);
   const setStoreIsPlaying = useCurrentTrack((s) => s.setIsPlaying);
+
+  // Resolve the current user ID once. Used as the listener identity
+  // when starting the realtime stream (so the Fan Agent knows who's
+  // listening). If not signed in, realtime is a no-op.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/auth/session', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled) return;
+        if (d?.authenticated && d?.user?.id) {
+          setCurrentUserId(d.user.id);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // The displayed track — prop wins over store (prop is for legacy AppShell)
   const track = trackProp ?? storeTrack;
@@ -151,9 +178,45 @@ export function PlayerBar({
         setProgress(Math.min(1, a.currentTime / dur));
       }
     }
-    function onPlay() { setInternalIsPlaying(true); setStoreIsPlaying(true); }
-    function onPause() { setInternalIsPlaying(false); setStoreIsPlaying(false); }
-    function onEnded() { setInternalIsPlaying(false); setStoreIsPlaying(false); setProgress(1); }
+    function onPlay() {
+      setInternalIsPlaying(true);
+      setStoreIsPlaying(true);
+      // Tell the realtime server a stream is starting so the Fan
+      // Agent can run end-of-stream and either charge the listener
+      // or skip the charge (self-play). Best-effort; we don't block
+      // audio on this.
+      if (currentUserId && track?.id) {
+        const a = audioRef.current;
+        const dur = (a && Number.isFinite(a.duration) ? a.duration : trackDurationSec) || 0;
+        void startRealtime({
+          userId: currentUserId,
+          songId: track.id,
+          durationSec: dur,
+          isResume: false,
+          playbackState: () => ({
+            positionSec: a?.currentTime ?? 0,
+            muted: a?.muted ?? false,
+            hidden: typeof document !== 'undefined' && document.visibilityState !== 'visible',
+            playbackRate: a?.playbackRate ?? 1,
+            volume: a?.volume ?? 1,
+            queuePosition: 0,
+          }),
+        });
+      }
+    }
+    function onPause() {
+      setInternalIsPlaying(false);
+      setStoreIsPlaying(false);
+      void realtimePause();
+    }
+    function onEnded() {
+      setInternalIsPlaying(false);
+      setStoreIsPlaying(false);
+      setProgress(1);
+      // End the realtime stream so the Fan Agent runs and decides on
+      // payment / playCount increment.
+      void realtimeEnd();
+    }
     a.addEventListener('timeupdate', onTime);
     a.addEventListener('durationchange', onTime);
     a.addEventListener('play', onPlay);
@@ -166,7 +229,7 @@ export function PlayerBar({
       a.removeEventListener('pause', onPause);
       a.removeEventListener('ended', onEnded);
     };
-  }, [setStoreIsPlaying]);
+  }, [setStoreIsPlaying, currentUserId, track?.id, trackDurationSec]);
 
   // Reset progress when track changes
   useEffect(() => {

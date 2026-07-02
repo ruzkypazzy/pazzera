@@ -107,7 +107,13 @@ export interface PayoutReceipt {
 
 /** What Fan Agent decides per stream (Phase 7). */
 export interface FanDecision {
-  classification: 'valid_stream' | 'partial_stream' | 'suspicious_stream' | 'fraudulent_stream';
+  classification:
+    | 'valid_stream'
+    | 'partial_stream'
+    | 'suspicious_stream'
+    | 'fraudulent_stream'
+    | 'self_play_artist'
+    | 'self_play_recipient';
   /** 0–100 fraud score (0 = clean, 100 = definite fraud). */
   fraudScore: number;
   /** Should we trigger the payment at thresholdSec? */

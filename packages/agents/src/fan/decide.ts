@@ -55,6 +55,11 @@ export interface FanInput {
   userAccountAgeDays: number;
   // Threshold the catalog wants to cross before charging (e.g. 25%)
   thresholdPct: number;
+  // Set by the worker if the listener is the song's primary artist
+  // ('primary_artist') or a RoyaltyRecipient of any role on the song
+  // ('featured_recipient'). Both skip the charge but still count as
+  // a valid play.
+  selfPlayKind: 'none' | 'primary_artist' | 'featured_recipient';
 }
 
 const FRAUD_FRAUDULENT = 75;
@@ -158,8 +163,20 @@ export function decideFan(input: FanInput): FanDecision {
   let shouldCharge = false;
   let paymentTriggerSec: number | undefined;
 
-  // First gate: classification is set by fraud severity
-  if (fraud >= FRAUD_FRAUDULENT) {
+  // Self-play override: the primary artist or a featured recipient
+  // listening to their own song never gets charged (the money would
+  // just round-trip). They still count as a valid play (playCount
+  // increment) and are still classified so we can attribute the listen.
+  if (input.selfPlayKind === 'primary_artist') {
+    classification = 'self_play_artist';
+    shouldCharge = false;
+    reasons.push('Listener is the primary artist of this song — no charge');
+  } else if (input.selfPlayKind === 'featured_recipient') {
+    classification = 'self_play_recipient';
+    shouldCharge = false;
+    reasons.push('Listener is a featured / royalty recipient on this song — no charge');
+  } else if (fraud >= FRAUD_FRAUDULENT) {
+    // First gate: classification is set by fraud severity
     classification = 'fraudulent_stream';
     shouldCharge = false;
     if (reasons.length === 0) reasons.push('Aggregated fraud severity in critical band');
