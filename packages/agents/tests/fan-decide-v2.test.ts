@@ -17,6 +17,7 @@ const baseInput: FanInput = {
   userPriorChargesForSongLast24h: 0,
   userAccountAgeDays: 90,
   thresholdPct: 25,
+  selfPlayKind: 'none',
 };
 
 describe('decideFan v2', () => {
@@ -58,5 +59,24 @@ describe('decideFan v2', () => {
     expect(r.signals).toBeDefined();
     expect(r.signals.thresholdSec).toBe(50);
     expect(r.signals.listenDurationSec).toBe(60);
+  });
+
+  it('primary artist listening to own song: valid listen, no charge', () => {
+    const r = decideFan({ ...baseInput, selfPlayKind: 'primary_artist' });
+    expect(r.classification).toBe('self_play_artist');
+    expect(r.shouldCharge).toBe(false);
+    expect(r.reasons.some((s) => s.toLowerCase().includes('primary artist'))).toBe(true);
+  });
+
+  it('featured recipient listening to their own song: valid listen, no charge', () => {
+    const r = decideFan({ ...baseInput, selfPlayKind: 'featured_recipient' });
+    expect(r.classification).toBe('self_play_recipient');
+    expect(r.shouldCharge).toBe(false);
+    expect(r.reasons.some((s) => s.toLowerCase().includes('featured'))).toBe(true);
+  });
+
+  it('self-play still produces non-empty reasons', () => {
+    const r = decideFan({ ...baseInput, selfPlayKind: 'primary_artist' });
+    expect(r.reasons.length).toBeGreaterThan(0);
   });
 });
