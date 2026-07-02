@@ -3,6 +3,17 @@ import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
+/** Human label for the custody model shown in the wallet card. */
+function labelCustody(custody: string, provider: string): string {
+  // Circle returns 'DEVELOPER' for DCW (Pazzera controls via walletSetId
+  // + entity secret) and 'END_USER' / 'USER' for UCW.
+  const c = custody.toUpperCase();
+  if (c === 'DEVELOPER') return 'Pazzera (DCW)';
+  if (c === 'END_USER' || c === 'USER') return 'You (UCW)';
+  if (provider === 'local-dev' || provider === 'local') return 'Pazzera (dev)';
+  return custody;
+}
+
 interface WalletState {
   address: string;
   status: string;
@@ -209,7 +220,7 @@ export function WalletClient() {
           </div>
           <div className="text-right text-xs text-fg-muted space-y-1">
             <div>Provider: <span className="text-fg">{wallet.provider}</span></div>
-            <div>Custody: <span className="text-fg">{wallet.custody === 'user' ? 'You (UCW)' : 'Pazzera (dev mode)'}</span></div>
+            <div>Custody: <span className="text-fg">{labelCustody(wallet.custody, wallet.provider)}</span></div>
             <div>Daily x402 cap: <span className="text-fg">{wallet.x402DailyCapUsdc} USDC</span></div>
           </div>
         </div>

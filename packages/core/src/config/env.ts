@@ -84,7 +84,7 @@ const schema = z.object({
   CIRCLE_API_KEY: z.string().min(1),
   CIRCLE_APP_ID: z.string().optional(),
   CIRCLE_BASE_URL: z.string().default('https://api.circle.com'),
-  CIRCLE_ENTITY_SECRET: z.string().optional(),
+  CIRCLE_ENTITY_SECRET: z.string().regex(/^[0-9a-fA-F]{64}$/, 'must be 64-char hex (32 bytes)').optional(),
   CIRCLE_GATEWAY_FACILITATOR_URL: z.string().default('https://gateway-api-testnet.circle.com'),
   CIRCLE_WALLET_SET_ID: z.string().optional(),
   CIRCLE_WEBHOOK_SECRET: z.string().optional(),
@@ -103,7 +103,7 @@ const schema = z.object({
   SPLIT_DEFAULT_PRODUCER_PCT: numericString('10'),
 
   // Wallet (Phase 4)
-  PAZZERA_WALLET_PROVIDER: z.enum(['local-dev', 'circle-ucw', 'arc-native']).default('local-dev'),
+  PAZZERA_WALLET_PROVIDER: z.enum(['local-dev', 'circle-ucw', 'circle-dcw', 'arc-native']).default('local-dev'),
   WALLET_DAILY_WITHDRAW_CAP_USDC: numericString('1000'),
   WALLET_WITHDRAW_COOLDOWN_SECONDS: numericString('60'),
   WALLET_RECOVERY_COOLDOWN_HOURS: numericString('24'),

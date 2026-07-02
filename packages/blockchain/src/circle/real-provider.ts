@@ -13,7 +13,7 @@
  * Retries use exponential backoff for 429 + 5xx only (4xx is terminal).
  */
 import { type Address, type Hex } from 'viem';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { getEnv, logger } from '@pazzera/core';
 import {
   CircleError,
@@ -29,6 +29,7 @@ import {
   type CircleX402SettleInput,
   type CircleX402SettleResult,
 } from './provider';
+import { getEntityPublicKey, encryptEntitySecret } from './entity-secret';
 
 interface FetchOptions {
   method: 'GET' | 'POST' | 'PATCH';
@@ -38,32 +39,63 @@ interface FetchOptions {
 }
 
 export class CircleRealProvider implements CircleProvider {
-  readonly name = 'circle-ucw';
+  readonly name = 'circle-dcw';
 
   private get baseUrl() { return getEnv().CIRCLE_BASE_URL; }
   private get walletSetId() { return getEnv().CIRCLE_WALLET_SET_ID; }
   private get apiKey() { return getEnv().CIRCLE_API_KEY; }
+  private get entitySecret() { return getEnv().CIRCLE_ENTITY_SECRET; }
   private get gatewayUrl() { return getEnv().CIRCLE_GATEWAY_FACILITATOR_URL; }
 
+  /**
+   * Fetch Circle's RSA public key + encrypt the entity secret for the
+   * current call. Each invocation returns a fresh ciphertext because
+   * Circle rejects replays.
+   */
+  private async freshEntityCiphertext(): Promise<string> {
+    const pem = await getEntityPublicKey({ baseUrl: this.baseUrl, apiKey: this.apiKey });
+    return encryptEntitySecret(pem, this.entitySecret);
+  }
+
   async createWallet(input: CircleCreateWalletInput): Promise<CircleCreateWalletResult> {
-    const idempotencyKey = input.idempotencyKey ?? randomBytes(16).toString('hex');
-    const resp = await this.request<{ data?: CircleCreateWalletResult } & CircleCreateWalletResult>({
+    // Circle requires UUID-format idempotencyKey. crypto.randomUUID() is
+    // available on Node 19+; the caller's value is ignored.
+    const idempotencyKey = randomUUID();
+    const entitySecretCiphertext = await this.freshEntityCiphertext();
+    // Circle's walletSetId is a strict UUID; some Pazzera envs use an
+    // 'X' prefix that needs to be stripped (e.g. 'X622c08e4-...').
+    const walletSetId = (this.walletSetId ?? '').replace(/^X/i, '');
+    const resp = await this.request<{ data?: { wallets?: CircleCreateWalletResult[] } | CircleCreateWalletResult }>({
       method: 'POST',
-      url: `${this.baseUrl}/v1/w3s/wallets`,
+      url: `${this.baseUrl}/v1/w3s/developer/wallets`,
       body: {
-        walletSetId: this.walletSetId,
-        userId: input.userId,
         idempotencyKey,
+        blockchains: ['ARC-TESTNET'],
+        entitySecretCiphertext,
+        walletSetId,
+        accountType: 'EOA',
+        count: 1,
+        metadata: [{ refId: input.userId }],
       },
       idempotencyKey,
     });
-    const account = (resp.data ?? resp) as unknown as CircleCreateWalletResult;
+    // Response shape: { data: { wallets: [{ id, address, custodyType, ... }] } }
+    const wrapper = (resp.data ?? resp) as unknown as
+      | { wallets?: CircleCreateWalletResult[] }
+      | CircleCreateWalletResult;
+    const account = ('wallets' in wrapper && Array.isArray(wrapper.wallets) ? wrapper.wallets[0] : wrapper) as unknown as {
+      id: string;
+      walletId?: string;
+      address: string;
+      custodyType?: string;
+      custody?: string;
+    };
     return {
-      walletId: account.walletId,
-      address: account.address,
-      custody: 'user',
-      providerMetadata: { mock: false, ...account.providerMetadata },
-      createdAt: new Date(account.createdAt),
+      walletId: account.walletId ?? account.id,
+      address: account.address as Address,
+      custody: (account.custody ?? account.custodyType ?? 'DEVELOPER') as CircleCreateWalletResult['custody'],
+      providerMetadata: { mock: false, source: 'circle-dcw' },
+      createdAt: new Date(),
     };
   }
 
@@ -81,24 +113,33 @@ export class CircleRealProvider implements CircleProvider {
   }
 
   async fetchBalance(walletIdOrAddress: string): Promise<CircleBalanceResult> {
-    const r = await this.request<CircleBalanceResult>({
+    // Balance reads don't need entitySecretCiphertext.
+    const r = await this.request<{ data?: CircleBalanceResult[] | CircleBalanceResult }>({
       method: 'GET',
       url: `${this.baseUrl}/v1/w3s/wallets/${walletIdOrAddress}/balances`,
     });
-    return r;
+    const wrapper = (r.data ?? r) as unknown as CircleBalanceResult[] | CircleBalanceResult;
+    if (Array.isArray(wrapper)) {
+      return wrapper[0];
+    }
+    return wrapper;
   }
 
   async prepareTransfer(input: CirclePrepareTransferInput): Promise<CirclePrepareTransferResult> {
-    const idempotencyKey = randomBytes(16).toString('hex');
+    const idempotencyKey = randomUUID();
+    const entitySecretCiphertext = await this.freshEntityCiphertext();
+    const walletSetId = (this.walletSetId ?? '').replace(/^X/i, '');
     const r = await this.request<CirclePrepareTransferResult>({
       method: 'POST',
-      url: `${this.baseUrl}/v1/w3s/transfers/developer`,
+      url: `${this.baseUrl}/v1/w3s/developer/transfers`,
       body: {
+        idempotencyKey,
+        entitySecretCiphertext,
+        walletSetId,
         walletId: input.walletId,
-        destination: input.destination,
-        amounts: ['USDC'],
-        amount: input.amountBaseUnits,
-        network: input.network,
+        destination: { type: 'address', address: input.destination, chain: input.network ?? 'ARC-TESTNET' },
+        amounts: [input.amountBaseUnits],
+        asset: 'USDC',
         memo: input.memo,
       },
       idempotencyKey,
@@ -170,6 +211,15 @@ export class CircleRealProvider implements CircleProvider {
           ?? (json as { errorCode?: string })?.errorCode
           ?? `http_${res.status}`;
         const retryable = res.status === 429 || res.status >= 500;
+        logger.error(
+          {
+            method: opts.method,
+            url: new URL(opts.url).pathname,
+            status: res.status,
+            body: text.slice(0, 1000),
+          },
+          'circle:request_failed',
+        );
         throw new CircleError(
           `Circle ${opts.method} ${new URL(opts.url).pathname} failed: ${res.status}`,
           res.status,

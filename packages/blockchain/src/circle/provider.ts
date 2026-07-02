@@ -19,7 +19,12 @@ export interface CircleCreateWalletInput {
 export interface CircleCreateWalletResult {
   walletId: string;
   address: Address;
-  custody: 'user';
+  // Circle W3S API returns 'DEVELOPER' for DCW (developer owns the keys via
+  // their entity secret + walletSet) and 'END_USER' / 'USER' for UCW (the
+  // human user owns recovery via PIN / social / device key). We keep the
+  // field stringly-typed so the real adapter can pass through whatever
+  // Circle returns, and downstream code dispatches on it.
+  custody: 'DEVELOPER' | 'END_USER' | 'USER' | 'user' | string;
   providerMetadata: Record<string, unknown>;
   createdAt: Date;
 }
