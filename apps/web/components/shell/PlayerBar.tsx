@@ -113,10 +113,10 @@ export function PlayerBar({
     if (a.src && a.src.endsWith(track.audioUrl)) return;
     a.src = track.audioUrl;
     a.load();
-    if (isPlaying) {
+    if (isPlayingProp) {
       a.play().then(() => setInternalIsPlaying(true)).catch(() => {});
     }
-  }, [track?.id, track?.audioUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [track?.id, track?.audioUrl, isPlayingProp]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sync audio element with play/pause prop (controlled mode)
   useEffect(() => {
