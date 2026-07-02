@@ -152,9 +152,14 @@ export default function UploadPage() {
     setCoverKey(null);
   }
 
-  async function uploadOne(file: File, kind: 'audio' | 'cover'): Promise<string> {
+  async function uploadOne(
+    file: File,
+    kind: 'audio' | 'cover',
+    songId: string,
+  ): Promise<string> {
     const fd = new FormData();
     fd.append('file', file);
+    fd.append('songId', songId);
     const url = kind === 'audio' ? '/api/upload/audio' : '/api/upload/cover';
     const res = await fetch(url, {
       method: 'POST',
@@ -308,13 +313,13 @@ export default function UploadPage() {
 
       // Step 1: upload audio
       setProgress(15);
-      const aKey = await uploadOne(audioFile!, 'audio');
+      const aKey = await uploadOne(audioFile!, 'audio', songId);
       setAudioKey(aKey);
       setProgress(50);
 
       // Step 2: upload cover
       setState('uploading-cover');
-      const cKey = await uploadOne(coverFile!, 'cover');
+      const cKey = await uploadOne(coverFile!, 'cover', songId);
       setCoverKey(cKey);
       setProgress(80);
 
