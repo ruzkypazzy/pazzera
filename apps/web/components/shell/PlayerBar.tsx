@@ -203,7 +203,6 @@ export function PlayerBar({
     (track as any)?.ratePerStreamUsdc ??
     Number((track as any)?.publishedPriceUsdc ?? 0.003);
   const elapsedSec = effectiveDurationSec * progress;
-  const accruedUsdc = elapsedSec * rate;
   const triggered = paymentTriggered ?? progress >= PAYMENT_THRESHOLD;
   const elapsedStr = formatTime(elapsedSec);
   const durationStr = formatTime(effectiveDurationSec);
@@ -395,19 +394,6 @@ export function PlayerBar({
               </motion.div>
             )}
           </AnimatePresence>
-
-          <div className="hidden items-center gap-1.5 rounded-full border border-[#282828] bg-[#181818] px-3 py-1.5 md:flex">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-[#B3B3B3]">USDC</span>
-            <motion.span
-              key={accruedUsdc.toFixed(6)}
-              initial={{ scale: 0.95, opacity: 0.7 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ duration: 0.15 }}
-              className="text-sm font-bold tabular-nums text-white"
-            >
-              {accruedUsdc.toFixed(6)}
-            </motion.span>
-          </div>
 
           <button
             onClick={() => setMuted((v) => !v)}
