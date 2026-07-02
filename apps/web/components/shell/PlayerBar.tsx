@@ -172,7 +172,7 @@ export function PlayerBar({
     setProgress(0);
   }, [track?.id]);
 
-  // Use real duration when audio is loaded, else fall back to track.durationSec
+  // Use real duration when audio is loaded, else fall back to track duration.
   const [realDuration, setRealDuration] = useState<number | null>(null);
   useEffect(() => {
     const a = audioRef.current;
@@ -191,9 +191,17 @@ export function PlayerBar({
     };
   }, []);
 
-  const effectiveDurationSec = realDuration ?? track?.durationSec ?? 0;
+  // `track` is `Track | CurrentTrack`. Track uses `durationSec`,
+  // CurrentTrack uses `durationSeconds`. Pull from either.
+  const trackDurationSec =
+    (track as any)?.durationSec ??
+    (track as any)?.durationSeconds ??
+    0;
+  const effectiveDurationSec = realDuration ?? trackDurationSec;
 
-  const rate = track?.ratePerStreamUsdc ?? 0.003;
+  const rate =
+    (track as any)?.ratePerStreamUsdc ??
+    Number((track as any)?.publishedPriceUsdc ?? 0.003);
   const elapsedSec = effectiveDurationSec * progress;
   const accruedUsdc = elapsedSec * rate;
   const triggered = paymentTriggered ?? progress >= PAYMENT_THRESHOLD;
