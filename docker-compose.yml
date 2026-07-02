@@ -55,6 +55,12 @@ services:
     ports:
       - "127.0.0.1:3000:3000"
       - "127.0.0.1:3001:3001"
+    volumes:
+      # Bind-mount a host directory as the local storage root so
+      # PM2 workers (running on the host) can read the same files
+      # the web container wrote. Path is stable; both web and
+      # host workers see the same bytes.
+      - /opt/pazzera/.local-storage:/tmp/pazzera-uploads
 
   worker:
     build:
