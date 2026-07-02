@@ -10,11 +10,16 @@
  *       audioKey, coverKey,
  *     },
  *     recipients: [{
- *       type: 'internal' | 'external',
- *       username, // Pazzera @username for internal; display name for external
- *       displayName, // shown publicly on credits
+ *       // one of three types:
+ *       // - 'internal'   = Pazzera user, splits royalties
+ *       // - 'external'   = 0x wallet, splits royalties
+ *       // - 'credit_only'= name only (e.g. paid outright upstream),
+ *       //                  0% split; appears in featuredNames / producerName
+ *       type: 'internal' | 'external' | 'credit_only',
+ *       username?,         // Pazzera @username for internal; ignored for credit_only
+ *       displayName,       // shown publicly on credits
  *       role: 'primary_artist' | 'featured_artist' | 'producer' | ...,
- *       percentageBps,
+ *       percentageBps,     // 0 for credit_only
  *       externalWalletAddress?, // when type=external
  *       externalLabel?,         // when type=external
  *     }, ...]
@@ -71,10 +76,37 @@ const RecipientSchema = z.discriminatedUnion('type', [
     role: Role,
     percentageBps: z.number().int().min(1).max(10000),
   }),
+  // Credit-only: name goes into featuredNames / producerName. No payout.
+  z.object({
+    type: z.literal('credit_only'),
+    displayName: z.string().min(1).max(60),
+    role: Role,
+    percentageBps: z.literal(0),
+  }),
 ]);
 
-type InternalRecipient = Extract<z.infer<typeof RecipientSchema>, { type: 'internal' }>;
-type ExternalRecipient = Extract<z.infer<typeof RecipientSchema>, { type: 'external' }>;
+type InternalRecipient = {
+  type: 'internal';
+  username: string;
+  displayName: string;
+  role: 'primary_artist' | 'featured_artist' | 'producer' | 'songwriter' | 'label' | 'custom';
+  percentageBps: number;
+};
+type ExternalRecipient = {
+  type: 'external';
+  username: string;
+  displayName: string;
+  externalWalletAddress: string;
+  externalLabel: string;
+  role: 'primary_artist' | 'featured_artist' | 'producer' | 'songwriter' | 'label' | 'custom';
+  percentageBps: number;
+};
+type CreditOnlyRecipient = {
+  type: 'credit_only';
+  displayName: string;
+  role: 'primary_artist' | 'featured_artist' | 'producer' | 'songwriter' | 'label' | 'custom';
+  percentageBps: 0;
+};
 
 const Body = z.object({
   songId: z.string().min(1),
@@ -119,7 +151,6 @@ export const POST = withApi(
       throw new AppError('FORBIDDEN', 'Not the song owner', 403);
     }
 
-    // Audio and cover must already be uploaded by /api/upload/{audio,cover}
     if (!body.metadata.audioKey || body.metadata.audioKey === 'pending') {
       throw new ValidationError('Audio not uploaded yet');
     }
@@ -134,17 +165,23 @@ export const POST = withApi(
     }
 
     // ─── Recipient uniqueness + percentage sanity ─────────────────────
-    const totalBps = body.recipients.reduce((s, r) => s + r.percentageBps, 0);
+    // The split total is over PAID recipients only — credit_only rows
+    // don't share the 100%, they're public credits only.
+    const paidRecipients = body.recipients.filter((r) => r.type !== 'credit_only');
+    const totalBps = paidRecipients.reduce(
+      (s: number, r) => s + (r.percentageBps as number),
+      0,
+    );
     if (totalBps !== 10000) {
       throw new ValidationError(
-        `Recipient splits must total 10000 bps (100%); got ${totalBps}`,
+        `Royalty splits must total 10000 bps (100%) across paid recipients; got ${totalBps}. Adjust percentages or mark credits as "credit only" if you've already paid them outright.`,
       );
     }
 
     const seenInternal = new Set<string>();
     const seenExternal = new Set<string>();
     let primaryCount = 0;
-    for (const r of body.recipients as { type: string; role?: string; username?: string; externalWalletAddress?: string }[]) {
+    for (const r of paidRecipients) {
       if (r.role === 'primary_artist') primaryCount += 1;
       if (r.type === 'internal') {
         const k = `${r.username}::${r.role}`;
@@ -154,8 +191,8 @@ export const POST = withApi(
           );
         }
         seenInternal.add(k);
-      } else {
-        const k = (r.externalWalletAddress ?? '').toLowerCase();
+      } else if (r.type === 'external') {
+        const k = r.externalWalletAddress.toLowerCase();
         if (seenExternal.has(k)) {
           throw new ValidationError('Duplicate external wallet address');
         }
@@ -163,17 +200,18 @@ export const POST = withApi(
       }
     }
     if (primaryCount === 0) {
-      throw new ValidationError('At least one recipient must be the primary artist');
+      throw new ValidationError('At least one paid recipient must be the primary artist');
     }
     if (primaryCount > 1) {
-      throw new ValidationError('Only one recipient may be the primary artist');
+      throw new ValidationError('Only one paid recipient may be the primary artist');
     }
 
+    // ─── Resolve internal usernames to user IDs ────────────────────────
     const internalUsernames = Array.from(
       new Set<string>(
-        body.recipients
-          .filter((r) => (r as { type?: string }).type === 'internal')
-          .map((r) => (r as { username: string }).username),
+        paidRecipients
+          .filter((r): r is { type: 'internal'; username: string } & z.infer<typeof RecipientSchema> => (r as { type?: string }).type === 'internal')
+          .map((r) => r.username),
       ),
     );
 
@@ -186,17 +224,18 @@ export const POST = withApi(
     const userByUsername = new Map<string, { id: string; username: string }>();
     for (const u of users) userByUsername.set(u.username, u);
 
-    for (const r of body.recipients) {
-      if (r.type === 'internal') {
-        if (!userByUsername.has(r.username)) {
+    for (const r of paidRecipients) {
+      if ((r as { type?: string }).type === 'internal') {
+        const ir = r as InternalRecipient;
+        if (!userByUsername.has(ir.username)) {
           throw new ValidationError(
-            `Unknown Pazzera user: @${r.username} — they need a Pazzera account before you can split royalties to them`,
+            `Unknown Pazzera user: @${ir.username} — they need a Pazzera account before you can split royalties to them. Mark them as "Credit only" if you've already paid them outright.`,
           );
         }
       }
     }
 
-    // ─── Persist metadata + recipients in one transaction ─────────────
+    // ─── Persist metadata + paid recipients in one transaction ─────────
     await prisma.$transaction([
       prisma.song.update({
         where: { id: song.id },
@@ -215,7 +254,7 @@ export const POST = withApi(
       }),
       prisma.royaltyRecipient.deleteMany({ where: { songId: song.id } }),
       prisma.royaltyRecipient.createMany({
-        data: body.recipients.map((r: z.infer<typeof RecipientSchema>, i: number) => {
+        data: paidRecipients.map((r: z.infer<typeof RecipientSchema>, i: number) => {
           if (r.type === 'internal') {
             const u = userByUsername.get(r.username)!;
             return {
@@ -227,14 +266,28 @@ export const POST = withApi(
               payoutPriority: 100 + i,
             };
           }
+          if (r.type === 'external') {
+            return {
+              songId: song.id,
+              userId: null,
+              externalWalletAddress: r.externalWalletAddress,
+              externalLabel: r.externalLabel,
+              username: r.displayName,
+              role: r.role,
+              splitPercentageBps: r.percentageBps,
+              payoutPriority: 100 + i,
+            };
+          }
+          // credit_only (defensive — shouldn't reach here as we filtered)
+          const cr = r as CreditOnlyRecipient;
           return {
             songId: song.id,
             userId: null,
-            externalWalletAddress: r.externalWalletAddress,
-            externalLabel: r.externalLabel,
-            username: r.displayName,
-            role: r.role,
-            splitPercentageBps: r.percentageBps,
+            externalWalletAddress: null,
+            externalLabel: null,
+            username: cr.displayName,
+            role: cr.role,
+            splitPercentageBps: 0,
             payoutPriority: 100 + i,
           };
         }),

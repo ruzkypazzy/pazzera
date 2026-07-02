@@ -20,7 +20,7 @@ const PAYMENT_THRESHOLD = 0.25;
 const USERNAME_REGEX = /^[a-z0-9_]{3,20}$/;
 const WALLET_REGEX = /^0x[a-fA-F0-9]{40}$/;
 
-type RecipientKind = 'internal' | 'external';
+type RecipientKind = 'internal' | 'external' | 'credit_only';
 type RecipientRole = 'primary_artist' | 'featured_artist' | 'producer';
 
 interface FormRecipient {
@@ -193,12 +193,17 @@ export default function UploadPage() {
     );
   }
 
-  /** Total percentage across all non-primary recipients. */
+  /** Total percentage across all PAID, non-primary recipients.
+   * Credit-only rows don't share the split — they're metadata only. */
   const secondaryTotal = useMemo(
     () =>
       recipients
-        .filter((r) => r.role !== 'primary_artist')
+        .filter((r) => r.role !== 'primary_artist' && r.kind !== 'credit_only')
         .reduce((s, r) => s + (Number.isFinite(r.percentage) ? r.percentage : 0), 0),
+    [recipients],
+  );
+  const creditOnlyCount = useMemo(
+    () => recipients.filter((r) => r.kind === 'credit_only').length,
     [recipients],
   );
   const primaryPerc = 100 - secondaryTotal;
@@ -220,13 +225,23 @@ export default function UploadPage() {
     if (!primary) return 'Primary artist row is missing';
 
     if (Math.abs(primaryPerc - primary.percentage) > 0.5) {
-      return `Splits must add up to 100%. Featured + producer total is ${secondaryTotal}%, primary is ${primary.percentage}% — rebalance to match.`;
+      return `Paid splits must add up to 100%. Featured + producer paid total is ${secondaryTotal}%, primary is ${primary.percentage}% — rebalance to match.`;
     }
-    if (primary.percentage <= 0 || primary.percentage >= 100) {
-      return 'Primary artist split must leave room for featured / producer (or they can be 0%)';
+    if (primary.percentage <= 0) {
+      return 'Primary artist split must be greater than 0%';
+    }
+    if (secondaryTotal === 0 && creditOnlyCount === 0 && primary.percentage !== 100) {
+      return 'Primary split must be 100% when no other paid recipients are listed';
     }
 
     for (const r of recipients) {
+      if (r.kind === 'credit_only') {
+        // No username / wallet required for credit-only rows.
+        if (!r.displayName.trim()) {
+          return `${r.role.replace('_', ' ')} credit name is required`;
+        }
+        continue;
+      }
       if (r.kind === 'internal') {
         if (!USERNAME_REGEX.test(r.pazzeraUsername)) {
           return `Pazzera @username must be 3–20 chars, lowercase a–z / 0–9 / _ (got "${r.pazzeraUsername}")`;
@@ -247,10 +262,11 @@ export default function UploadPage() {
       }
     }
 
-    // Featured + producer dedupe
+    // Featured + producer dedupe — only paid rows count toward uniqueness.
     const seenKeys = new Set<string>();
     for (const r of recipients) {
       if (r.role === 'primary_artist') continue;
+      if (r.kind === 'credit_only') continue;
       const k = r.kind === 'internal' ? r.pazzeraUsername.toLowerCase() : r.walletAddress.toLowerCase();
       if (seenKeys.has(k)) return `Duplicate recipient: ${r.kind === 'internal' ? '@' + r.pazzeraUsername : r.walletAddress}`;
       seenKeys.add(k);
@@ -291,7 +307,12 @@ export default function UploadPage() {
       const featuredNames: string[] = featured.map((r) => r.displayName);
       const producerName: string | null = producerRow?.displayName?.trim() || null;
 
-      const apiRecipients = [
+      type ApiRecipient =
+        | { type: 'internal'; username: string; displayName: string; role: 'primary_artist' | 'featured_artist' | 'producer'; percentageBps: number }
+        | { type: 'external'; username: string; displayName: string; role: 'primary_artist' | 'featured_artist' | 'producer'; percentageBps: number; externalWalletAddress: string; externalLabel: string }
+        | { type: 'credit_only'; displayName: string; role: 'primary_artist' | 'featured_artist' | 'producer'; percentageBps: 0 };
+
+      const apiRecipients: ApiRecipient[] = [
         {
           type: 'internal' as const,
           username: primary.pazzeraUsername,
@@ -299,31 +320,64 @@ export default function UploadPage() {
           role: 'primary_artist' as const,
           percentageBps: Math.round(primary.percentage * 100),
         },
-        ...featured.map((r) => ({
-          type: r.kind,
-          username: r.kind === 'internal' ? r.pazzeraUsername : r.walletAddress,
-          displayName: r.displayName,
-          role: 'featured_artist' as const,
-          percentageBps: Math.round(r.percentage * 100),
-          ...(r.kind === 'external'
-            ? { externalWalletAddress: r.walletAddress, externalLabel: r.walletLabel }
-            : {}),
-        })),
+        ...featured.map((r): ApiRecipient => {
+          if (r.kind === 'credit_only') {
+            return {
+              type: 'credit_only',
+              displayName: r.displayName,
+              role: 'featured_artist',
+              percentageBps: 0,
+            };
+          }
+          if (r.kind === 'internal') {
+            return {
+              type: 'internal',
+              username: r.pazzeraUsername,
+              displayName: r.displayName,
+              role: 'featured_artist',
+              percentageBps: Math.round(r.percentage * 100),
+            };
+          }
+          return {
+            type: 'external',
+            username: r.walletAddress,
+            displayName: r.displayName,
+            role: 'featured_artist',
+            percentageBps: Math.round(r.percentage * 100),
+            externalWalletAddress: r.walletAddress,
+            externalLabel: r.walletLabel,
+          };
+        }),
         ...(producerRow
           ? [
-              {
-                type: producerRow.kind,
-                username: producerRow.kind === 'internal' ? producerRow.pazzeraUsername : producerRow.walletAddress,
-                displayName: producerRow.displayName,
-                role: 'producer' as const,
-                percentageBps: Math.round(producerRow.percentage * 100),
-                ...(producerRow.kind === 'external'
-                  ? {
-                      externalWalletAddress: producerRow.walletAddress,
-                      externalLabel: producerRow.walletLabel,
-                    }
-                  : {}),
-              },
+              ((): ApiRecipient => {
+                if (producerRow.kind === 'credit_only') {
+                  return {
+                    type: 'credit_only',
+                    displayName: producerRow.displayName,
+                    role: 'producer',
+                    percentageBps: 0,
+                  };
+                }
+                if (producerRow.kind === 'internal') {
+                  return {
+                    type: 'internal',
+                    username: producerRow.pazzeraUsername,
+                    displayName: producerRow.displayName,
+                    role: 'producer',
+                    percentageBps: Math.round(producerRow.percentage * 100),
+                  };
+                }
+                return {
+                  type: 'external',
+                  username: producerRow.walletAddress,
+                  displayName: producerRow.displayName,
+                  role: 'producer',
+                  percentageBps: Math.round(producerRow.percentage * 100),
+                  externalWalletAddress: producerRow.walletAddress,
+                  externalLabel: producerRow.walletLabel,
+                };
+              })(),
             ]
           : []),
       ];
@@ -562,10 +616,13 @@ export default function UploadPage() {
                 Credits &amp; royalty split
               </h2>
               <p className="mt-1 text-xs text-[#B3B3B3]">
-                Splits must add up to 100%. Each recipient gets a public display
-                name plus a Pazzera <span className="font-bold text-white">@username</span>{' '}
-                (which must exist on Pazzera to receive payouts) OR an external
-                wallet address.
+                Paid splits must add up to 100%. Each paid recipient gets a
+                public display name plus a Pazzera{' '}
+                <span className="font-bold text-white">@username</span> (which
+                must exist on Pazzera to receive payouts) OR an external wallet
+                address. Already paid outright? Toggle to{' '}
+                <span className="font-bold text-[#FCD34D]">Credit only</span> —
+                their name still shows on the song page, no split needed.
               </p>
             </div>
 
@@ -657,38 +714,32 @@ export default function UploadPage() {
             />
 
             {/* Split sanity meter */}
-            <div
-              className={`flex items-center gap-2 rounded-2xl border px-4 py-3 text-sm ${
-                Math.round(
-                  (recipients.find((r) => r.role === 'primary_artist')?.percentage ?? 0) +
-                    secondaryTotal,
-                ) === 100
-                  ? 'border-[#10B981]/30 bg-[#10B981]/10 text-[#6EE7B7]'
-                  : 'border-[#EF4444]/30 bg-[#EF4444]/10 text-[#FCA5A5]'
-              }`}
-            >
-              <Check
-                className={`h-4 w-4 ${
-                  Math.round(
-                    (recipients.find((r) => r.role === 'primary_artist')?.percentage ?? 0) +
-                      secondaryTotal,
-                  ) === 100
-                    ? 'text-[#10B981]'
-                    : 'text-[#EF4444]'
-                }`}
-              />
-              <span>
-                Splits total:{' '}
-                <span className="font-bold tabular-nums text-white">
-                  {Math.round(
-                    (recipients.find((r) => r.role === 'primary_artist')?.percentage ?? 0) +
-                      secondaryTotal,
+            {(() => {
+              const primaryPct = recipients.find((r) => r.role === 'primary_artist')?.percentage ?? 0;
+              const total = Math.round(primaryPct + secondaryTotal);
+              const ok = total === 100;
+              return (
+                <div
+                  className={`flex flex-wrap items-center gap-2 rounded-2xl border px-4 py-3 text-sm ${
+                    ok
+                      ? 'border-[#10B981]/30 bg-[#10B981]/10 text-[#6EE7B7]'
+                      : 'border-[#EF4444]/30 bg-[#EF4444]/10 text-[#FCA5A5]'
+                  }`}
+                >
+                  <Check className={`h-4 w-4 ${ok ? 'text-[#10B981]' : 'text-[#EF4444]'}`} />
+                  <span>
+                    Paid splits total:{' '}
+                    <span className="font-bold tabular-nums text-white">{total}%</span> —
+                    must equal 100%.
+                  </span>
+                  {creditOnlyCount > 0 && (
+                    <span className="ml-auto rounded-full bg-[#1A1408] px-2 py-0.5 text-[10px] text-[#FCD34D]">
+                      {creditOnlyCount} credit-only (no payout)
+                    </span>
                   )}
-                  %
-                </span>{' '}
-                — must equal 100%.
-              </span>
-            </div>
+                </div>
+              );
+            })()}
           </section>
 
           {/* === Submit === */}
@@ -798,7 +849,10 @@ function CreditGroup({
   thisTotalKey: string;
   single?: boolean;
 }) {
-  const thisTotal = rows.reduce((s, r) => s + (Number.isFinite(r.percentage) ? r.percentage : 0), 0);
+  const thisTotal = rows
+    .filter((r) => r.kind !== 'credit_only')
+    .reduce((s, r) => s + (Number.isFinite(r.percentage) ? r.percentage : 0), 0);
+  const thisCreditCount = rows.filter((r) => r.kind === 'credit_only').length;
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -839,10 +893,17 @@ function CreditGroup({
       ))}
 
       {rows.length > 0 && (
-        <p className="text-right text-[10px] text-[#6A6A6A]">
-          {title} total:{' '}
-          <span className="font-bold tabular-nums text-white">
-            {Math.round(thisTotal)}%
+        <p className="flex items-center justify-end gap-3 text-[10px] text-[#6A6A6A]">
+          {thisCreditCount > 0 && (
+            <span className="rounded-full bg-[#1A1408] px-2 py-0.5 text-[#FCD34D]">
+              {thisCreditCount} credit-only
+            </span>
+          )}
+          <span>
+            {title} paid total:{' '}
+            <span className="font-bold tabular-nums text-white">
+              {Math.round(thisTotal)}%
+            </span>
           </span>
         </p>
       )}
@@ -862,10 +923,10 @@ function CreditRow({
   return (
     <div className="space-y-3 rounded-2xl border border-[#282828] bg-[#0A0A0A] p-4">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={() => onChange({ kind: 'internal' })}
+            onClick={() => onChange({ kind: 'internal', percentage: row.percentage || 15 })}
             className={`flex items-center gap-1 rounded-full px-3 py-1.5 text-[11px] font-semibold ${
               row.kind === 'internal'
                 ? 'border border-[#00D4AA] bg-[#00D4AA]/10 text-[#00D4AA]'
@@ -877,7 +938,7 @@ function CreditRow({
           </button>
           <button
             type="button"
-            onClick={() => onChange({ kind: 'external' })}
+            onClick={() => onChange({ kind: 'external', percentage: row.percentage || 15 })}
             className={`flex items-center gap-1 rounded-full px-3 py-1.5 text-[11px] font-semibold ${
               row.kind === 'external'
                 ? 'border border-[#7B5EFF] bg-[#7B5EFF]/10 text-[#C7B9FF]'
@@ -886,6 +947,18 @@ function CreditRow({
           >
             <Wallet className="h-3 w-3" />
             External wallet
+          </button>
+          <button
+            type="button"
+            onClick={() => onChange({ kind: 'credit_only', percentage: 0 })}
+            className={`flex items-center gap-1 rounded-full px-3 py-1.5 text-[11px] font-semibold ${
+              row.kind === 'credit_only'
+                ? 'border border-[#F59E0B] bg-[#F59E0B]/10 text-[#FCD34D]'
+                : 'border border-[#282828] text-[#B3B3B3]'
+            }`}
+          >
+            <Sparkles className="h-3 w-3" />
+            Credit only
           </button>
         </div>
         <button
@@ -899,79 +972,112 @@ function CreditRow({
       </div>
 
       <div className="grid gap-3 md:grid-cols-12">
-        <div className="md:col-span-5">
-          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-[#B3B3B3]">
-            {row.kind === 'internal' ? 'Pazzera @username' : 'Wallet address'}
-          </label>
-          {row.kind === 'internal' ? (
-            <div className="flex items-center gap-2 rounded-2xl border border-[#282828] bg-[#050505] px-3 py-2 focus-within:border-[#00D4AA]">
-              <AtSign className="h-3.5 w-3.5 text-[#6A6A6A]" />
+        {row.kind !== 'credit_only' ? (
+          <>
+            <div className="md:col-span-5">
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-[#B3B3B3]">
+                {row.kind === 'internal' ? 'Pazzera @username' : 'Wallet address'}
+              </label>
+              {row.kind === 'internal' ? (
+                <div className="flex items-center gap-2 rounded-2xl border border-[#282828] bg-[#050505] px-3 py-2 focus-within:border-[#00D4AA]">
+                  <AtSign className="h-3.5 w-3.5 text-[#6A6A6A]" />
+                  <input
+                    className="w-full bg-transparent text-sm text-white placeholder:text-[#6A6A6A] outline-none"
+                    value={row.pazzeraUsername}
+                    onChange={(e) =>
+                      onChange({
+                        pazzeraUsername: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''),
+                      })
+                    }
+                    placeholder="adazy"
+                    maxLength={20}
+                  />
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 rounded-2xl border border-[#282828] bg-[#050505] px-3 py-2 focus-within:border-[#7B5EFF]">
+                  <Wallet className="h-3.5 w-3.5 text-[#6A6A6A]" />
+                  <input
+                    className="w-full bg-transparent text-sm text-white placeholder:text-[#6A6A6A] outline-none"
+                    value={row.walletAddress}
+                    onChange={(e) => onChange({ walletAddress: e.target.value.trim() })}
+                    placeholder="0x…"
+                    maxLength={42}
+                  />
+                </div>
+              )}
+            </div>
+
+            <div className="md:col-span-5">
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-[#B3B3B3]">
+                Display name
+              </label>
               <input
-                className="w-full bg-transparent text-sm text-white placeholder:text-[#6A6A6A] outline-none"
-                value={row.pazzeraUsername}
-                onChange={(e) =>
-                  onChange({
-                    pazzeraUsername: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''),
-                  })
+                className="input-square"
+                value={row.displayName}
+                onChange={(e) => onChange({ displayName: e.target.value })}
+                placeholder={
+                  row.role === 'featured_artist'
+                    ? 'Featured artist name'
+                    : row.role === 'producer'
+                      ? 'Producer credit'
+                      : 'Artist name'
                 }
-                placeholder="adazy"
-                maxLength={20}
+                maxLength={60}
               />
             </div>
-          ) : (
-            <div className="flex items-center gap-2 rounded-2xl border border-[#282828] bg-[#050505] px-3 py-2 focus-within:border-[#7B5EFF]">
-              <Wallet className="h-3.5 w-3.5 text-[#6A6A6A]" />
+
+            <div className="md:col-span-2">
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-[#B3B3B3]">
+                Split %
+              </label>
+              <div className="flex items-center gap-1">
+                <input
+                  className="input-square"
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={0.5}
+                  value={row.percentage}
+                  onChange={(e) =>
+                    onChange({
+                      percentage: Math.max(0, Math.min(100, Number(e.target.value))),
+                    })
+                  }
+                />
+                <span className="text-sm text-[#B3B3B3]">%</span>
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="md:col-span-10">
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-[#B3B3B3]">
+                Credit name
+              </label>
               <input
-                className="w-full bg-transparent text-sm text-white placeholder:text-[#6A6A6A] outline-none"
-                value={row.walletAddress}
-                onChange={(e) => onChange({ walletAddress: e.target.value.trim() })}
-                placeholder="0x…"
-                maxLength={42}
+                className="input-square"
+                value={row.displayName}
+                onChange={(e) => onChange({ displayName: e.target.value })}
+                placeholder={
+                  row.role === 'featured_artist'
+                    ? 'Featured artist name'
+                    : row.role === 'producer'
+                      ? 'Producer credit'
+                      : 'Credit name'
+                }
+                maxLength={60}
               />
             </div>
-          )}
-        </div>
-
-        <div className="md:col-span-5">
-          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-[#B3B3B3]">
-            Display name
-          </label>
-          <input
-            className="input-square"
-            value={row.displayName}
-            onChange={(e) => onChange({ displayName: e.target.value })}
-            placeholder={
-              row.role === 'featured_artist'
-                ? 'Featured artist name'
-                : row.role === 'producer'
-                  ? 'Producer credit'
-                  : 'Artist name'
-            }
-            maxLength={60}
-          />
-        </div>
-
-        <div className="md:col-span-2">
-          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-[#B3B3B3]">
-            Split %
-          </label>
-          <div className="flex items-center gap-1">
-            <input
-              className="input-square"
-              type="number"
-              min={0}
-              max={100}
-              step={0.5}
-              value={row.percentage}
-              onChange={(e) =>
-                onChange({
-                  percentage: Math.max(0, Math.min(100, Number(e.target.value))),
-                })
-              }
-            />
-            <span className="text-sm text-[#B3B3B3]">%</span>
-          </div>
-        </div>
+            <div className="md:col-span-2">
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-[#B3B3B3]">
+                Split %
+              </label>
+              <div className="flex items-center gap-1 rounded-2xl border border-[#F59E0B]/30 bg-[#1A1408] px-3 py-2 text-sm">
+                <span className="font-bold text-[#FCD34D]">0%</span>
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       {row.kind === 'external' && (
