@@ -241,7 +241,7 @@ export function WalletClient() {
             </Button>
             <p className="text-xs text-fg-muted">
               The key is decrypted from Pazzera's encrypted store, sent over TLS, and never logged.
-              Once you close this page we can\u2019t show it again — save it somewhere safe.
+              Once you close this page we can't show it again — save it somewhere safe.
             </p>
           </div>
         ) : (

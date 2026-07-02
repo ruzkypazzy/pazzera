@@ -36,13 +36,18 @@ const Body = z.object({
 
 export const dynamic = 'force-dynamic';
 
-export const POST = withApi<{ userId: string }>(
-  async ({ req, userId }) => {
+export const POST = withApi(
+  async ({ req }) => {
     const body = getParsedBody<{ confirm?: string }>(req);
     const parsed = Body.safeParse(body);
     if (!parsed.success) {
       throw new ValidationError('You must type "I understand" to export the private key.', { issues: parsed.error.issues });
     }
+
+    // Get the authed user's session — userId is NOT passed by withApi.
+    const { requireSession } = await import('@pazzera/core');
+    const session = await requireSession();
+    const userId = session.userId;
 
     const wallet = await prisma.wallet.findUnique({
       where: { userId },
