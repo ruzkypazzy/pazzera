@@ -13,6 +13,7 @@ import { sumStrings } from '@pazzera/db/utils/big-arith';
 import { logger, getEnv, AppError, BlockchainError } from '@pazzera/core';
 import { getWalletProvider } from '../wallets/factory';
 import { signAuthorizationFor, transferFor } from '../wallets/local-dev-provider';
+import { CircleRealProvider } from '../circle/real-provider';
 import { usdcToBaseUnits, baseUnitsToUsdc } from '../adapters/usdc';
 
 /**
@@ -255,8 +256,44 @@ export class WalletService {
     });
 
     try {
-      // UCW path: this throws (intentionally — UCW signs client-side)
-      // LocalDev path: this signs + submits using the encrypted key
+      // DCW (real Circle developer-controlled): Pazzera signs server-side
+      // through Circle's prepareTransfer / submitTransfer API. The
+      // entitySecretCiphertext is set per request; the resulting
+      // settlement happens on-chain. x402 + DCW both work the same
+      // way from a user-perspective — the platform controls the
+      // signing keys via the entity secret.
+      if (wallet.provider === 'circle-dcw' || wallet.provider === 'circle-ucw' || wallet.provider === 'circle-mock') {
+        const circle = getCircleProvider();
+        const prepared = await circle.prepareTransfer({
+          walletId: wallet.providerWalletId,
+          destination: { kind: 'address', value: opts.toAddress },
+          amountBaseUnits,
+          network: 'ARC-TESTNET',
+          memo: opts.memo,
+        });
+        // The mock's prepareTransfer already returns a `transferId`;
+        // the real DCW flow submits via submitTransfer (idempotent).
+        const settled = (prepared as { transferId?: string }).transferId
+          ? await circle.submitTransfer((prepared as { transferId: string }).transferId)
+          : prepared;
+        await prisma.walletTransaction.update({
+          where: { id: tx.id },
+          data: {
+            status: 'confirmed',
+            txHash: (settled as { txHash?: string }).txHash ?? null,
+            submittedAt: new Date(),
+            confirmedAt: new Date(),
+          },
+        });
+        await incrementWalletAnalyticsSpend(wallet.id, amountBaseUnits);
+        return {
+          txHash: (settled as { txHash?: string }).txHash ?? null,
+          blockNumber: 0,
+          status: 'confirmed',
+        };
+      }
+
+      // Legacy local-dev path: Pazzera held the encrypted key.
       if (wallet.provider === 'local-dev' && wallet.encryptedPrivateKey) {
         await prisma.walletTransaction.update({
           where: { id: tx.id },
@@ -281,15 +318,15 @@ export class WalletService {
             failureReason: r.status === 'failed' ? 'tx_reverted' : null,
           },
         });
-        // Bump analytics
         await incrementWalletAnalyticsSpend(wallet.id, amountBaseUnits);
         return { txHash: r.txHash, blockNumber: r.blockNumber, status: r.status };
       }
 
-      // UCW: client must sign. Return pending + a challenge token.
+      // Shouldn't get here in normal operation, but if we do, surface
+      // a clear error instead of crashing.
       throw new AppError(
         'PAYMENT_FAILED',
-        'User-controlled wallet requires client-side signing (x402). Use the x402 flow.',
+        'No signing path available for this wallet provider.',
         402,
       );
     } catch (err) {
@@ -338,8 +375,8 @@ export class WalletService {
     if (wallet.status !== 'active') {
       throw new AppError('FORBIDDEN', `Wallet is ${wallet.status}`, 403);
     }
-    if (!wallet.encryptedPrivateKey) {
-      throw new AppError('FORBIDDEN', 'UCW wallets must sign client-side', 403);
+    if (!wallet.encryptedPrivateKey && wallet.provider !== 'circle-dcw' && wallet.provider !== 'circle-ucw') {
+      throw new AppError('FORBIDDEN', 'Wallet has no signing material', 403);
     }
 
     // Per-stream + daily x402 caps
@@ -370,7 +407,73 @@ export class WalletService {
       });
     }
 
-    const sig = await signAuthorizationFor(wallet.userId, wallet.encryptedPrivateKey, opts);
+    // DCW + UCW: ask Circle to sign the EIP-712 typed data. Circle
+    // holds the keys, the platform passes the typed data + entity
+    // secret and Circle returns the signature.
+    if (wallet.provider === 'circle-dcw' || wallet.provider === 'circle-ucw') {
+      const circle = getCircleProvider();
+      const sig = await (circle as CircleRealProvider).signTypedData({
+        walletId: wallet.providerWalletId,
+        typedData: {
+          types: {
+            EIP712Domain: [
+              { name: 'name', type: 'string' },
+              { name: 'version', type: 'string' },
+              { name: 'chainId', type: 'uint256' },
+              { name: 'verifyingContract', type: 'address' },
+            ],
+            TransferWithAuthorization: [
+              { name: 'from', type: 'address' },
+              { name: 'to', type: 'address' },
+              { name: 'value', type: 'uint256' },
+              { name: 'validAfter', type: 'uint256' },
+              { name: 'validBefore', type: 'uint256' },
+              { name: 'nonce', type: 'bytes32' },
+            ],
+          },
+          primaryType: 'TransferWithAuthorization',
+          domain: {
+            name: 'USDC',
+            version: '2',
+            chainId: opts.chainId,
+            verifyingContract: opts.usdcContract,
+          },
+          message: {
+            from: wallet.address as Address,
+            to: opts.to,
+            value: opts.valueBaseUnits,
+            validAfter: opts.validAfter,
+            validBefore: opts.validBefore,
+            nonce: opts.nonce,
+          },
+      } });
+      await prisma.wallet.update({
+        where: { id: wallet.id },
+        data: { x402AuthorizedAt: new Date() },
+      });
+      await prisma.walletTransaction.create({
+        data: {
+          walletId: wallet.id,
+          type: 'x402_settlement',
+          direction: 'debit',
+          amountUsdc: baseUnitsToUsdc(opts.valueBaseUnits),
+          amountBaseUnits: opts.valueBaseUnits,
+          status: 'signed',
+          signedAt: new Date(),
+          counterpartyAddress: opts.to,
+          memo: 'x402 nano payment (pre-settlement)',
+        },
+      });
+      return {
+        v: (sig as { v?: number }).v ?? 0,
+        r: ((sig as { r?: Hex }).r ?? '0x') as Hex,
+        s: ((sig as { s?: Hex }).s ?? '0x') as Hex,
+        platformSigned: true,
+      };
+    }
+
+    // Legacy local-dev path: Pazzera held the encrypted key.
+    const sig = await signAuthorizationFor(wallet.userId, wallet.encryptedPrivateKey!, opts);
     await prisma.wallet.update({
       where: { id: wallet.id },
       data: { x402AuthorizedAt: new Date() },

@@ -129,6 +129,10 @@ export class CircleRealProvider implements CircleProvider {
     const idempotencyKey = randomUUID();
     const entitySecretCiphertext = await this.freshEntityCiphertext();
     const walletSetId = (this.walletSetId ?? '').replace(/^X/i, '');
+    // Circle's destination object: { kind, value } where kind is
+    // 'address' or 'walletId'. For external withdrawals we always
+    // pass kind='address' with the raw 0x... string.
+    const dest = input.destination;
     const r = await this.request<CirclePrepareTransferResult>({
       method: 'POST',
       url: `${this.baseUrl}/v1/w3s/developer/transfers`,
@@ -137,7 +141,9 @@ export class CircleRealProvider implements CircleProvider {
         entitySecretCiphertext,
         walletSetId,
         walletId: input.walletId,
-        destination: { type: 'address', address: input.destination, chain: input.network ?? 'ARC-TESTNET' },
+        destination: dest.kind === 'address'
+          ? { type: 'address', address: dest.value, chain: input.network ?? 'ARC-TESTNET' }
+          : { type: 'walletId', walletId: dest.value },
         amounts: [input.amountBaseUnits],
         asset: 'USDC',
         memo: input.memo,
@@ -161,6 +167,43 @@ export class CircleRealProvider implements CircleProvider {
       url: `${this.baseUrl}/v1/w3s/transfers/${transferId}`,
     });
     return r;
+  }
+
+  async signTypedData(input: { walletId: string; typedData: unknown }): Promise<{ v: number; r: Hex; s: Hex }> {
+    // Per Circle's docs: POST /v1/w3s/developer/sign/typedData.
+    // Requires entitySecretCiphertext. The wallet id identifies which
+    // DCW key to sign with; the typed data is the EIP-712 payload.
+    const idempotencyKey = randomUUID();
+    const entitySecretCiphertext = await this.freshEntityCiphertext();
+    const r = await this.request<{ data?: { signature?: string; v?: string | number; r?: string; s?: string } }>({
+      method: 'POST',
+      url: `${this.baseUrl}/v1/w3s/developer/sign/typedData`,
+      body: {
+        idempotencyKey,
+        entitySecretCiphertext,
+        walletId: input.walletId,
+        typedData: input.typedData,
+      },
+      idempotencyKey,
+    });
+    const data = r.data ?? (r as { signature?: string; v?: string | number; r?: string; s?: string });
+    // Circle returns signature as a concatenated 0x{ r || s || v } hex
+    // string in some versions, and split r/s/v in others. Handle both.
+    if (data.signature) {
+      const sig = data.signature.startsWith('0x') ? data.signature.slice(2) : data.signature;
+      if (sig.length === 130) {
+        return {
+          r: ('0x' + sig.slice(0, 64)) as Hex,
+          s: ('0x' + sig.slice(64, 128)) as Hex,
+          v: parseInt(sig.slice(128, 130), 16),
+        };
+      }
+    }
+    return {
+      r: (data.r ?? '0x') as Hex,
+      s: (data.s ?? '0x') as Hex,
+      v: typeof data.v === 'string' ? parseInt(data.v, 16) : (data.v ?? 0),
+    };
   }
 
   async settleX402(input: CircleX402SettleInput): Promise<CircleX402SettleResult> {

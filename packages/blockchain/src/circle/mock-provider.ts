@@ -174,6 +174,16 @@ export class CircleMockProvider implements CircleProvider {
     };
   }
 
+  async signTypedData(input: { walletId: string; typedData: unknown }): Promise<{ v: number; r: Hex; s: Hex }> {
+    // Mock: the platform doesn't have the key, so we return a fake
+    // signature. The Circle real provider actually asks Circle to sign.
+    return {
+      v: 27,
+      r: ('0x' + '11'.repeat(32)) as Hex,
+      s: ('0x' + '22'.repeat(32)) as Hex,
+    };
+  }
+
   async settleX402(input: CircleX402SettleInput): Promise<CircleX402SettleResult> {
     return withRetry(async () => {
       if (this.failureRate > 0 && Math.random() < this.failureRate) {

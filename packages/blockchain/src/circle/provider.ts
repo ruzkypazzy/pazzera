@@ -121,6 +121,15 @@ export interface CircleProvider {
   /** x402 — facilitator-mediated nano-payment settlement. */
   settleX402(input: CircleX402SettleInput): Promise<CircleX402SettleResult>;
 
+  /** Sign EIP-712 typed data with the wallet's key (Circle holds it for
+   *  DCW/UCW). Returns a v/r/s triple. Used by the x402 nano-payment
+   *  flow where Pazzera pre-signs TransferWithAuthorization on the
+   *  user's behalf, with caps enforced at the wallet row. */
+  signTypedData(input: {
+    walletId: string;
+    typedData: unknown;
+  }): Promise<{ v: number; r: Hex; s: Hex }>;
+
   /** Health. */
   healthCheck(): Promise<{ ok: boolean; latencyMs: number; message?: string }>;
 }
