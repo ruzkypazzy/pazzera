@@ -111,7 +111,9 @@ export const GET = withApi(async () => {
             title: topSongRow.title,
             coverUrl: topSongRow.coverUrl,
             streams: topSongRow.playCount,
-            earnedUsdc: ((Number(topSongRow.songMetrics?.totalRevenueBaseUnits ?? 0n)) / 1_000_000).toString(),
+            earnedUsdc: (
+              Number(topSongRow.songMetrics?.totalRevenueBaseUnits ?? '0') / 1_000_000
+            ).toString(),
           }
         : null,
       walletBalance: wallet?.balanceUsdc ?? '0',
