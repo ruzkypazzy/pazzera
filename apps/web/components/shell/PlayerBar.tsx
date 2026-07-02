@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Repeat, Shuffle, Heart, Sparkles, Zap } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 
@@ -12,6 +12,7 @@ export type Track = {
   coverUrl?: string | null;
   durationSec: number;
   ratePerStreamUsdc: number; // e.g. 0.003
+  audioUrl?: string; // NEW: actual audio file URL
 };
 
 type Props = {
@@ -34,47 +35,167 @@ export function PlayerBar({
   onSkipPrev,
   paymentTriggered,
 }: Props) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const [progress, setProgress] = useState(0); // 0..1
   const [volume, setVolume] = useState(0.7);
   const [muted, setMuted] = useState(false);
   const [liked, setLiked] = useState(false);
+  const [internalIsPlaying, setInternalIsPlaying] = useState(false);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Simulated playback — in production, the WebSocket stream drives this.
-  // We tick 250ms at a time so the progress bar feels smooth.
+  // Combine controlled + uncontrolled playing state
+  const playing = isPlaying || internalIsPlaying;
+
+  // Listen for "pazzera:play" events dispatched from song pages / cards.
+  // Detail shape: { id, title, artistName, coverUrl, audioUrl,
+  // durationSeconds, publishedPriceUsdc (used to derive ratePerStreamUsdc) }
   useEffect(() => {
-    if (!track || !isPlaying) {
-      if (tickRef.current) clearInterval(tickRef.current);
-      return;
+    function onPlay(e: Event) {
+      const ce = e as CustomEvent<{
+        id?: string;
+        title?: string;
+        artistName?: string;
+        coverUrl?: string;
+        audioUrl?: string;
+        durationSeconds?: number;
+        publishedPriceUsdc?: string;
+      }>;
+      const s = ce.detail;
+      if (!s || !s.audioUrl) return;
+      const a = audioRef.current;
+      if (!a) return;
+      a.src = s.audioUrl;
+      a.load();
+      a.play()
+        .then(() => setInternalIsPlaying(true))
+        .catch((err) => {
+          console.warn('[PlayerBar] play() rejected:', err);
+          setInternalIsPlaying(false);
+        });
     }
-    tickRef.current = setInterval(() => {
-      setProgress((p) => {
-        const next = p + 0.25 / track.durationSec;
-        if (next >= 1) {
-          if (tickRef.current) clearInterval(tickRef.current);
-          return 1;
-        }
-        return next;
-      });
-    }, 250);
+    window.addEventListener('pazzera:play', onPlay as EventListener);
+    return () => window.removeEventListener('pazzera:play', onPlay as EventListener);
+  }, []);
+
+  // When track prop changes externally, swap the audio source
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a || !track?.audioUrl) return;
+    if (a.src && a.src.endsWith(track.audioUrl)) return;
+    a.src = track.audioUrl;
+    a.load();
+    if (isPlaying) {
+      a.play().then(() => setInternalIsPlaying(true)).catch(() => {});
+    }
+  }, [track?.id, track?.audioUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sync audio element with play/pause prop (controlled mode)
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    if (isPlaying) {
+      a.play().then(() => setInternalIsPlaying(true)).catch(() => {});
+    } else {
+      a.pause();
+      setInternalIsPlaying(false);
+    }
+  }, [isPlaying]);
+
+  // Volume + mute sync
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    a.volume = muted ? 0 : volume;
+  }, [volume, muted]);
+
+  // Real progress driven by <audio> timeupdate
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    function onTime() {
+      const a = audioRef.current;
+      if (!a) return;
+      const dur = a.duration;
+      if (Number.isFinite(dur) && dur > 0) {
+        setProgress(Math.min(1, a.currentTime / dur));
+      }
+    }
+    function onPlay() { setInternalIsPlaying(true); }
+    function onPause() { setInternalIsPlaying(false); }
+    function onEnded() { setInternalIsPlaying(false); setProgress(1); }
+    a.addEventListener('timeupdate', onTime);
+    a.addEventListener('durationchange', onTime);
+    a.addEventListener('play', onPlay);
+    a.addEventListener('pause', onPause);
+    a.addEventListener('ended', onEnded);
     return () => {
-      if (tickRef.current) clearInterval(tickRef.current);
+      a.removeEventListener('timeupdate', onTime);
+      a.removeEventListener('durationchange', onTime);
+      a.removeEventListener('play', onPlay);
+      a.removeEventListener('pause', onPause);
+      a.removeEventListener('ended', onEnded);
     };
-  }, [track, isPlaying]);
+  }, []);
 
   // Reset progress when track changes
   useEffect(() => {
     setProgress(0);
   }, [track?.id]);
 
+  // Use real duration when audio is loaded, else fall back to track.durationSec
+  const [realDuration, setRealDuration] = useState<number | null>(null);
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    function onDur() {
+      const a = audioRef.current;
+      if (a && Number.isFinite(a.duration) && a.duration > 0) {
+        setRealDuration(a.duration);
+      }
+    }
+    a.addEventListener('durationchange', onDur);
+    a.addEventListener('loadedmetadata', onDur);
+    return () => {
+      a.removeEventListener('durationchange', onDur);
+      a.removeEventListener('loadedmetadata', onDur);
+    };
+  }, []);
+
+  const effectiveDurationSec = realDuration ?? track?.durationSec ?? 0;
+
   const rate = track?.ratePerStreamUsdc ?? 0.003;
-  const elapsedSec = (track?.durationSec ?? 0) * progress;
+  const elapsedSec = effectiveDurationSec * progress;
   const accruedUsdc = elapsedSec * rate;
   const triggered = paymentTriggered ?? progress >= PAYMENT_THRESHOLD;
   const elapsedStr = formatTime(elapsedSec);
-  const durationStr = formatTime(track?.durationSec ?? 0);
+  const durationStr = formatTime(effectiveDurationSec);
+
+  // Toggle handler — drives the actual <audio> element
+  const handleTogglePlay = () => {
+    const a = audioRef.current;
+    if (!a) {
+      onTogglePlay?.();
+      return;
+    }
+    if (a.paused) {
+      // If we have no src yet but a track prop is set with audioUrl,
+      // load it.
+      if (!a.src && track?.audioUrl) {
+        a.src = track.audioUrl;
+        a.load();
+      }
+      a.play().then(() => setInternalIsPlaying(true)).catch((err) => {
+        console.warn('[PlayerBar] play() rejected:', err);
+      });
+    } else {
+      a.pause();
+      setInternalIsPlaying(false);
+    }
+    onTogglePlay?.();
+  };
 
   return (
+    <>
     <div
       className="fixed inset-x-0 z-30 h-[80px] border-t border-[#282828]"
       style={{
@@ -143,11 +264,11 @@ export function PlayerBar({
               <SkipBack className="h-4 w-4 fill-current" />
             </button>
             <button
-              onClick={onTogglePlay}
+              onClick={handleTogglePlay}
               className="grid h-10 w-10 place-items-center rounded-full bg-white text-black transition hover:scale-105"
-              aria-label={isPlaying ? 'Pause' : 'Play'}
+              aria-label={playing ? 'Pause' : 'Play'}
             >
-              {isPlaying ? <Pause className="h-5 w-5 fill-current" /> : <Play className="h-5 w-5 fill-current" />}
+              {playing ? <Pause className="h-5 w-5 fill-current" /> : <Play className="h-5 w-5 fill-current" />}
             </button>
             <button
               onClick={onSkipNext}
@@ -253,6 +374,9 @@ export function PlayerBar({
         </div>
       </div>
     </div>
+    {/* The actual <audio> element driving playback */}
+    <audio ref={audioRef} preload="metadata" />
+  </>
   );
 }
 
