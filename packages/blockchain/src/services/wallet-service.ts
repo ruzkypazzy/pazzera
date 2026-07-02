@@ -75,11 +75,24 @@ export class WalletService {
         ? 'circle-ucw'
         : (localResult.providerWalletId.startsWith('local-') ? 'local-dev' : localProvider.name);
 
+    // Address resolution: the on-chain address stored on the wallet MUST
+    // match the address the user can derive from the encrypted key we hand
+    // them via /api/wallet/export. We hold the local key, so the address is
+    // the local provider's address. The Circle adapter is only the source
+    // of providerWalletId / custody metadata.
+    //
+    // In Circle UCW mode (real), the platform never sees the key — Circle
+    // holds it — so the Circle address is the truth. Switch on that case.
+    const activeAddress =
+      circle.name === 'circle-ucw'
+        ? (circleResult.address ?? localResult.address)
+        : localResult.address;
+
     const env = getEnv();
     const wallet = await prisma.wallet.create({
       data: {
         userId,
-        address: circleResult.address ?? localResult.address,
+        address: activeAddress,
         encryptedPrivateKey: localResult.encryptedSecret ?? '',
         encryptionVersion: 2,
         keyVersion: 1,

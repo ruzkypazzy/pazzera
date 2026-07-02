@@ -96,6 +96,19 @@ export function WalletClient() {
 
   useEffect(() => {
     loadAll();
+    // Poll balance + transactions every 10s so deposits and
+    // stream payments show up without a manual refresh.
+    const interval = setInterval(() => {
+      // refresh=1 hits the on-chain reader; deposits/transactions
+      // are read straight from Postgres so a regular GET is fine.
+      fetch('/api/wallet/balance?refresh=1').then((r) => r.json()).then((d) => {
+        if (d?.ok) setWallet(d.wallet);
+      }).catch(() => undefined);
+      fetch('/api/wallet/transactions?limit=25').then((r) => r.json()).then((d) => {
+        if (d?.ok) setTxs(d.transactions);
+      }).catch(() => undefined);
+    }, 10_000);
+    return () => clearInterval(interval);
   }, []);
 
   async function copyAddress() {
