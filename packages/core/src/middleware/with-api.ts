@@ -67,9 +67,12 @@ export function withApi<TParams = unknown>(
         }
       }
 
-      // Body validation
+      // Body validation — only auto-parse JSON. Multipart bodies are
+      // read by the handler (e.g. /api/upload/audio multipart path).
+      const reqContentType = req.headers.get('content-type') ?? '';
+      const isJson = reqContentType.includes('application/json');
       let body: unknown = undefined;
-      if (opts.bodySchema && hasBody(req.method)) {
+      if (opts.bodySchema && hasBody(req.method) && isJson) {
         try {
           const json = await req.json().catch(() => ({}));
           body = opts.bodySchema.parse(json);
