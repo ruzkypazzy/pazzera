@@ -38,6 +38,7 @@ export function PlayerBar({
 }: Props) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [progress, setProgress] = useState(0); // 0..1
+  const [elapsedSecState, setElapsedSecState] = useState(0); // seconds, updated by polling
   const [volume, setVolume] = useState(0.7);
   const [muted, setMuted] = useState(false);
   const [liked, setLiked] = useState(false);
@@ -170,7 +171,32 @@ export function PlayerBar({
   // Reset progress when track changes
   useEffect(() => {
     setProgress(0);
+    setElapsedSecState(0);
   }, [track?.id]);
+
+  // Polling fallback for the elapsed time display. `timeupdate` events
+  // fire at most every ~250ms in some browsers (and can be throttled
+  // further when the tab is in the background), which makes the
+  // seconds counter look frozen. A 100ms polling loop reads
+  // `a.currentTime` directly so the UI always reflects actual playback
+  // time.
+  useEffect(() => {
+    const id = setInterval(() => {
+      const a = audioRef.current;
+      if (!a) return;
+      const t = a.currentTime;
+      const d = a.duration;
+      if (Number.isFinite(t) && t >= 0) {
+        // Update displayed elapsed time directly (independent of the
+        // `progress` ratio, which is used for the bar width).
+        setElapsedSecState(t);
+        if (Number.isFinite(d) && d > 0) {
+          setProgress(Math.min(1, t / d));
+        }
+      }
+    }, 100);
+    return () => clearInterval(id);
+  }, []);
 
   // Use real duration when audio is loaded, else fall back to track duration.
   const [realDuration, setRealDuration] = useState<number | null>(null);
@@ -202,7 +228,7 @@ export function PlayerBar({
   const rate =
     (track as any)?.ratePerStreamUsdc ??
     Number((track as any)?.publishedPriceUsdc ?? 0.003);
-  const elapsedSec = effectiveDurationSec * progress;
+  const elapsedSec = elapsedSecState;
   const triggered = paymentTriggered ?? progress >= PAYMENT_THRESHOLD;
   const elapsedStr = formatTime(elapsedSec);
   const durationStr = formatTime(effectiveDurationSec);
