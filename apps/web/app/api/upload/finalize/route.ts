@@ -37,6 +37,7 @@ import {
   ValidationError,
   prisma,
 } from '@pazzera/core';
+import { getStorageService } from '@pazzera/storage';
 import { startProcessing } from '@pazzera/upload/pipeline';
 
 const Role = z.enum([
@@ -248,7 +249,9 @@ export const POST = withApi(
           description: body.metadata.description ?? null,
           durationSeconds: body.metadata.durationSeconds,
           audioKey: body.metadata.audioKey,
+          audioUrl: await getStorageService().getUrl(body.metadata.audioKey),
           coverKey: body.metadata.coverKey,
+          coverUrl: await getStorageService().getUrl(body.metadata.coverKey),
           artistPriceUsdc: body.priceUsdc,
         },
       }),

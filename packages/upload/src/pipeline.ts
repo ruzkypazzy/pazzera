@@ -153,33 +153,15 @@ export async function startProcessing(songId: string): Promise<void> {
 
 /**
  * Download a storage key to a local temp file.
- * For local provider the key IS the local path; for R2 we fetch via
- * the public URL.
+ * Always goes through the StorageService so the local root is resolved
+ * by the service (no hardcoded process.cwd() paths).
  */
 async function downloadToTemp(storageKey: string, suffix = '.bin'): Promise<string> {
-  const env = (() => {
-    try {
-      // Use the same env the storage service uses
-      return (process.env.STORAGE_PROVIDER ?? 'local');
-    } catch {
-      return 'local';
-    }
-  })();
   const tmp = await mkdtemp(path.join(os.tmpdir(), 'pazzera-pipeline-'));
   const out = path.join(tmp, `input-${Date.now()}${suffix}`);
-  if (env === 'local') {
-    // The key is the relative path inside ./tmp/uploads/
-    const localPath = path.resolve(process.cwd(), 'tmp', 'uploads', storageKey);
-    const { readFile: rf, writeFile: wf } = await import('node:fs/promises');
-    await wf(out, await rf(localPath));
-  } else {
-    const { getStorageService } = await import('@pazzera/storage');
-    const url = await getStorageService().getUrl(storageKey, { expiresInSec: 300 });
-    const r = await fetch(url);
-    if (!r.ok) throw new Error(`Failed to download ${storageKey}: ${r.status}`);
-    const buf = Buffer.from(await r.arrayBuffer());
-    await writeFile(out, buf);
-  }
+  const { getStorageService } = await import('@pazzera/storage');
+  const buf = await getStorageService().getBytes(storageKey);
+  await writeFile(out, buf);
   return out;
 }
 

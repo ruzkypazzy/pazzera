@@ -1,11 +1,13 @@
 # Pazzera web image — Next.js production build
-FROM node:20-alpine AS base
-RUN apk add --no-cache libc6-compat ffmpeg tini
+FROM node:20-bookworm-slim AS base
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libc6 tini openssl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
 # Dependencies
 FROM base AS deps
-COPY pnpm-workspace.yaml package.json ./
+COPY pnpm-workspace.yaml package.json .npmrc ./
 COPY apps/web/package.json apps/web/
 COPY packages/core/package.json packages/core/
 COPY packages/db/package.json packages/db/
@@ -14,7 +16,8 @@ COPY packages/blockchain/package.json packages/blockchain/
 COPY packages/queue/package.json packages/queue/
 COPY packages/realtime/package.json packages/realtime/
 COPY packages/agents/package.json packages/agents/
-RUN corepack enable && corepack prepare pnpm@9.6.0 --activate && pnpm install --frozen-lockfile
+COPY pnpm-lock.yaml ./
+RUN corepack enable && corepack prepare pnpm@9.15.9 --activate && pnpm install --frozen-lockfile
 
 # Build
 FROM base AS builder
@@ -22,19 +25,20 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/apps/web/node_modules ./apps/web/node_modules
 COPY --from=deps /app/packages ./packages
 COPY . .
-RUN corepack enable && corepack prepare pnpm@9.6.0 --activate && pnpm --filter @pazzera/web build
+RUN corepack enable && corepack prepare pnpm@9.15.9 --activate && pnpm --filter @pazzera/web build
 
 # Runtime
 FROM base AS runner
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV SOCKET_PORT=3001
-RUN addgroup -g 1001 -S nodejs && adduser -S pazzera -u 1001
+RUN groupadd -g 1001 nodejs && useradd -u 1001 -g nodejs -m -s /bin/bash pazzera
 COPY --from=builder /app/apps/web/.next/standalone ./
 COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
 COPY --from=builder /app/apps/web/public ./apps/web/public
 COPY --from=builder /app/packages ./packages
 USER pazzera
+RUN mkdir -p /tmp/pazzera-uploads && chmod 777 /tmp/pazzera-uploads
 EXPOSE 3000 3001
-ENTRYPOINT ["/sbin/tini", "--"]
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "apps/web/server.js"]

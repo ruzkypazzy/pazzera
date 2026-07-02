@@ -44,7 +44,18 @@ export interface PresignedPutOptions {
   minBytes?: number;
 }
 
+export interface GetBytesOptions {
+  /** Optional range header (e.g. for partial reads) */
+  range?: { start: number; end?: number };
+}
+
 export interface StorageService {
+  /**
+   * Stream the raw bytes for `key`. Returns a Buffer; small files only.
+   * Used by the upload pipeline to feed ffmpeg / ffprobe.
+   */
+  getBytes(key: string, opts?: GetBytesOptions): Promise<Buffer>;
+
   put(opts: PutOptions): Promise<{ key: string; url: string }>;
   getUrl(key: string, opts?: GetUrlOptions): Promise<string>;
   exists(key: string): Promise<boolean>;
@@ -106,6 +117,16 @@ class S3CompatibleService implements StorageService {
     return getSignedUrl(this.client, cmd, { expiresIn: opts.expiresInSec });
   }
 
+  async getBytes(key: string, _opts?: GetBytesOptions): Promise<Buffer> {
+    const cmd = new GetObjectCommand({ Bucket: this.bucket, Key: key });
+    const res = await this.client.send(cmd);
+    const body = res.Body as { transformToByteArray?: () => Promise<Uint8Array> } | undefined;
+    if (!body?.transformToByteArray) {
+      throw new StorageError(`Empty body for ${key}`);
+    }
+    return Buffer.from(await body.transformToByteArray());
+  }
+
   async exists(key: string): Promise<boolean> {
     try {
       await this.client.send(
@@ -161,7 +182,14 @@ class LocalService implements StorageService {
   private readonly publicBase: string;
 
   constructor() {
-    this.root = path.resolve(process.cwd(), 'tmp', 'uploads');
+    // Use a stable, writable location. Inside the Docker container the
+    // app's working directory (/app/apps/web) is owned by root and the
+    // pazzera user can't create new files there. Default to /tmp which
+    // is always writable, and let the operator override via env.
+    const envRoot = process.env.PAZZERA_LOCAL_STORAGE_ROOT;
+    this.root = envRoot
+      ? path.resolve(envRoot)
+      : path.resolve('/tmp', 'pazzera-uploads');
     this.publicBase = '/uploads';
   }
 
@@ -174,6 +202,16 @@ class LocalService implements StorageService {
 
   async getUrl(key: string): Promise<string> {
     return `${this.publicBase}/${key}`;
+  }
+
+  async getBytes(key: string, _opts?: GetBytesOptions): Promise<Buffer> {
+    const fullPath = path.join(this.root, key);
+    // Prevent path traversal.
+    if (!fullPath.startsWith(this.root + path.sep) && fullPath !== this.root) {
+      throw new StorageError('Path traversal blocked');
+    }
+    const { readFile } = await import('node:fs/promises');
+    return readFile(fullPath);
   }
 
   async exists(key: string): Promise<boolean> {
