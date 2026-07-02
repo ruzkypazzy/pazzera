@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Repeat, Shuffle, Heart, Sparkles, Zap } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
+import { useCurrentTrack, type CurrentTrack } from '@/lib/current-track';
 
 export type Track = {
   id: string;
@@ -12,7 +13,7 @@ export type Track = {
   coverUrl?: string | null;
   durationSec: number;
   ratePerStreamUsdc: number; // e.g. 0.003
-  audioUrl?: string; // NEW: actual audio file URL
+  audioUrl?: string;
 };
 
 type Props = {
@@ -28,9 +29,9 @@ type Props = {
 const PAYMENT_THRESHOLD = 0.25; // Pazzera spec: 25% triggers the USDC charge
 
 export function PlayerBar({
-  track,
-  isPlaying = false,
-  onTogglePlay,
+  track: trackProp,
+  isPlaying: isPlayingProp = false,
+  onTogglePlay: onTogglePlayProp,
   onSkipNext,
   onSkipPrev,
   paymentTriggered,
@@ -43,39 +44,67 @@ export function PlayerBar({
   const [internalIsPlaying, setInternalIsPlaying] = useState(false);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Combine controlled + uncontrolled playing state
-  const playing = isPlaying || internalIsPlaying;
+  // Pull from global current-track store. If a `track` prop is also
+  // passed, prefer it (for backwards compat), but the store is the
+  // source of truth for the layout-level PlayerBar.
+  const storeTrack = useCurrentTrack((s) => s.track);
+  const setStoreTrack = useCurrentTrack((s) => s.setTrack);
+  const storeIsPlaying = useCurrentTrack((s) => s.isPlaying);
+  const setStoreIsPlaying = useCurrentTrack((s) => s.setIsPlaying);
+
+  // The displayed track — prop wins over store (prop is for legacy AppShell)
+  const track = trackProp ?? storeTrack;
+  const playing = isPlayingProp || storeIsPlaying || internalIsPlaying;
 
   // Listen for "pazzera:play" events dispatched from song pages / cards.
   // Detail shape: { id, title, artistName, coverUrl, audioUrl,
-  // durationSeconds, publishedPriceUsdc (used to derive ratePerStreamUsdc) }
+  // durationSeconds, publishedPriceUsdc }.
   useEffect(() => {
     function onPlay(e: Event) {
       const ce = e as CustomEvent<{
         id?: string;
+        slug?: string;
         title?: string;
         artistName?: string;
+        artistUsername?: string;
         coverUrl?: string;
         audioUrl?: string;
         durationSeconds?: number;
         publishedPriceUsdc?: string;
       }>;
       const s = ce.detail;
-      if (!s || !s.audioUrl) return;
+      if (!s || !s.audioUrl || !s.id) return;
+      // Update the global store so the bar shows this track.
+      setStoreTrack({
+        id: s.id,
+        slug: s.slug ?? s.id,
+        title: s.title ?? 'Unknown',
+        artistName: s.artistName ?? 'Unknown',
+        artistUsername: s.artistUsername ?? '',
+        coverUrl: s.coverUrl ?? '',
+        audioUrl: s.audioUrl,
+        durationSeconds: s.durationSeconds ?? 0,
+        publishedPriceUsdc: s.publishedPriceUsdc ?? '0.002',
+      });
       const a = audioRef.current;
       if (!a) return;
+      if (a.src && a.src.endsWith(s.audioUrl)) {
+        a.play().then(() => setInternalIsPlaying(true)).catch(() => {});
+        return;
+      }
       a.src = s.audioUrl;
       a.load();
       a.play()
-        .then(() => setInternalIsPlaying(true))
+        .then(() => { setInternalIsPlaying(true); setStoreIsPlaying(true); })
         .catch((err) => {
           console.warn('[PlayerBar] play() rejected:', err);
           setInternalIsPlaying(false);
+          setStoreIsPlaying(false);
         });
     }
     window.addEventListener('pazzera:play', onPlay as EventListener);
     return () => window.removeEventListener('pazzera:play', onPlay as EventListener);
-  }, []);
+  }, [setStoreTrack, setStoreIsPlaying]);
 
   // When track prop changes externally, swap the audio source
   useEffect(() => {
@@ -93,13 +122,14 @@ export function PlayerBar({
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
-    if (isPlaying) {
-      a.play().then(() => setInternalIsPlaying(true)).catch(() => {});
+    if (isPlayingProp) {
+      a.play().then(() => { setInternalIsPlaying(true); setStoreIsPlaying(true); }).catch(() => {});
     } else {
       a.pause();
       setInternalIsPlaying(false);
+      setStoreIsPlaying(false);
     }
-  }, [isPlaying]);
+  }, [isPlayingProp, setStoreIsPlaying]);
 
   // Volume + mute sync
   useEffect(() => {
@@ -120,9 +150,9 @@ export function PlayerBar({
         setProgress(Math.min(1, a.currentTime / dur));
       }
     }
-    function onPlay() { setInternalIsPlaying(true); }
-    function onPause() { setInternalIsPlaying(false); }
-    function onEnded() { setInternalIsPlaying(false); setProgress(1); }
+    function onPlay() { setInternalIsPlaying(true); setStoreIsPlaying(true); }
+    function onPause() { setInternalIsPlaying(false); setStoreIsPlaying(false); }
+    function onEnded() { setInternalIsPlaying(false); setStoreIsPlaying(false); setProgress(1); }
     a.addEventListener('timeupdate', onTime);
     a.addEventListener('durationchange', onTime);
     a.addEventListener('play', onPlay);
@@ -135,7 +165,7 @@ export function PlayerBar({
       a.removeEventListener('pause', onPause);
       a.removeEventListener('ended', onEnded);
     };
-  }, []);
+  }, [setStoreIsPlaying]);
 
   // Reset progress when track changes
   useEffect(() => {
@@ -174,24 +204,37 @@ export function PlayerBar({
   const handleTogglePlay = () => {
     const a = audioRef.current;
     if (!a) {
-      onTogglePlay?.();
+      onTogglePlayProp?.();
       return;
     }
     if (a.paused) {
-      // If we have no src yet but a track prop is set with audioUrl,
-      // load it.
-      if (!a.src && track?.audioUrl) {
-        a.src = track.audioUrl;
+      // If we have no src yet, try to load from the current track
+      // (either prop or store). The store is the source of truth for
+      // the layout-level PlayerBar.
+      const audioUrl = track?.audioUrl ?? storeTrack?.audioUrl;
+      if (!a.src && audioUrl) {
+        a.src = audioUrl;
         a.load();
       }
-      a.play().then(() => setInternalIsPlaying(true)).catch((err) => {
-        console.warn('[PlayerBar] play() rejected:', err);
-      });
+      // Still no src? Nothing to play.
+      if (!a.src) {
+        console.warn('[PlayerBar] play() with no audio src — pick a song first.');
+        onTogglePlayProp?.();
+        return;
+      }
+      a.play()
+        .then(() => { setInternalIsPlaying(true); setStoreIsPlaying(true); })
+        .catch((err) => {
+          console.warn('[PlayerBar] play() rejected:', err);
+          setInternalIsPlaying(false);
+          setStoreIsPlaying(false);
+        });
     } else {
       a.pause();
       setInternalIsPlaying(false);
+      setStoreIsPlaying(false);
     }
-    onTogglePlay?.();
+    onTogglePlayProp?.();
   };
 
   return (

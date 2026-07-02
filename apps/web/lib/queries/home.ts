@@ -18,13 +18,18 @@ const DAY = 24 * 60 * 60 * 1000;
 
 export type FeedTrack = {
   id: string;
+  slug: string;
   title: string;
   artistName: string;
   artistId: string;
+  artistUsername: string;
   artistAvatarUrl: string | null;
   coverUrl: string | null;
+  audioUrl: string | null;
+  durationSeconds: number;
   genre: string | null;
   rateUsdc: number;
+  publishedPriceUsdc: string;
   totalEarningsUsdc: number;
   totalPlays: number;
 };
@@ -133,13 +138,18 @@ export async function getHomeFeed(): Promise<HomeFeed> {
       if (!song) return null;
       return {
         id: song.id,
+        slug: song.slug,
         title: song.title ?? 'Untitled',
         artistName: song.artist?.displayName ?? song.artist?.username ?? song.artistName ?? 'Unknown',
         artistId: song.artist?.id ?? '',
+        artistUsername: song.artist?.username ?? song.artistUsername ?? '',
         artistAvatarUrl: song.artist?.avatarUrl ?? null,
         coverUrl: song.coverUrl ?? song.coverThumbUrl ?? null,
+        audioUrl: song.audioUrl ?? null,
+        durationSeconds: song.durationSeconds ?? 0,
         genre: song.genre ?? null,
         rateUsdc: parseUsdc(song.publishedPriceUsdc ?? song.artistPriceUsdc ?? 0.003),
+        publishedPriceUsdc: song.publishedPriceUsdc ?? song.artistPriceUsdc ?? '0.003',
         totalEarningsUsdc: parseUsdc(r._sum.amountUsdc),
         totalPlays: r._count._all,
       } as FeedTrack;
@@ -161,13 +171,18 @@ export async function getHomeFeed(): Promise<HomeFeed> {
   );
   const newReleases: FeedTrack[] = newReleasesRaw.map((t: any) => ({
     id: t.id,
+    slug: t.slug,
     title: t.title ?? 'Untitled',
     artistName: t.artist?.displayName ?? t.artist?.username ?? t.artistName ?? 'Unknown',
     artistId: t.artist?.id ?? '',
+    artistUsername: t.artist?.username ?? t.artistUsername ?? '',
     artistAvatarUrl: t.artist?.avatarUrl ?? null,
     coverUrl: t.coverUrl ?? t.coverThumbUrl ?? null,
+    audioUrl: t.audioUrl ?? null,
+    durationSeconds: t.durationSeconds ?? 0,
     genre: t.genre ?? null,
     rateUsdc: parseUsdc(t.publishedPriceUsdc ?? t.artistPriceUsdc ?? 0.003),
+    publishedPriceUsdc: t.publishedPriceUsdc ?? t.artistPriceUsdc ?? '0.003',
     totalEarningsUsdc: 0,
     totalPlays: 0,
   }));
@@ -248,13 +263,18 @@ export async function getHomeFeed(): Promise<HomeFeed> {
         const t = s.song;
         return {
           id: t.id,
+          slug: t.slug,
           title: t.title ?? 'Untitled',
           artistName: t.artist?.displayName ?? t.artist?.username ?? t.artistName ?? 'Unknown',
           artistId: t.artist?.id ?? '',
+          artistUsername: t.artist?.username ?? t.artistUsername ?? '',
           artistAvatarUrl: t.artist?.avatarUrl ?? null,
           coverUrl: t.coverUrl ?? t.coverThumbUrl ?? null,
+          audioUrl: t.audioUrl ?? null,
+          durationSeconds: t.durationSeconds ?? 0,
           genre: t.genre ?? null,
           rateUsdc: parseUsdc(t.publishedPriceUsdc ?? t.artistPriceUsdc ?? 0.003),
+          publishedPriceUsdc: t.publishedPriceUsdc ?? t.artistPriceUsdc ?? '0.003',
           totalEarningsUsdc: 0,
           totalPlays: 0,
         } as FeedTrack;

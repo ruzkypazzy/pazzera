@@ -136,7 +136,33 @@ export default async function HomePage() {
                 <div className="mt-1 truncate text-2xl font-extrabold text-white md:text-3xl">{madeForYou.title}</div>
                 <div className="mt-1 text-sm text-[#B3B3B3]">by {madeForYou.artistName}</div>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <Link href={`/song/${madeForYou.id}`}><button className="btn-primary !py-2 !px-4 text-sm">▶ Play</button></Link>
+                  {madeForYou.audioUrl ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (typeof window !== 'undefined') {
+                          window.dispatchEvent(
+                            new CustomEvent('pazzera:play', {
+                              detail: {
+                                id: madeForYou.id,
+                                slug: madeForYou.slug ?? madeForYou.id,
+                                title: madeForYou.title,
+                                artistName: madeForYou.artistName,
+                                artistUsername: madeForYou.artistUsername ?? '',
+                                coverUrl: madeForYou.coverUrl ?? '',
+                                audioUrl: madeForYou.audioUrl,
+                                durationSeconds: madeForYou.durationSeconds ?? 0,
+                                publishedPriceUsdc: madeForYou.publishedPriceUsdc ?? '0.003',
+                              },
+                            }),
+                          );
+                        }
+                      }}
+                      className="btn-primary !py-2 !px-4 text-sm"
+                    >▶ Play</button>
+                  ) : (
+                    <Link href={`/song/${madeForYou.id}`}><button className="btn-primary !py-2 !px-4 text-sm">▶ Play</button></Link>
+                  )}
                   <span className="badge-pay">${madeForYou.rateUsdc.toFixed(4)} / stream</span>
                   <span className="badge-arc">Settled on Arc</span>
                 </div>
@@ -158,10 +184,15 @@ export default async function HomePage() {
                 key={`recent-${t.id}`}
                 track={{
                   id: t.id,
+                  slug: t.slug,
                   title: t.title,
                   artistName: t.artistName,
+                  artistUsername: t.artistUsername,
                   artistId: t.artistId,
                   coverUrl: t.coverUrl ?? null,
+                  audioUrl: t.audioUrl ?? null,
+                  durationSeconds: t.durationSeconds,
+                  publishedPriceUsdc: t.publishedPriceUsdc,
                   ratePerStreamUsdc: t.rateUsdc,
                   totalPlays: t.totalPlays,
                   recommendedBy: 'fan',
@@ -183,10 +214,15 @@ export default async function HomePage() {
                 key={`trend-${t.id}`}
                 track={{
                   id: t.id,
+                  slug: t.slug,
                   title: t.title,
                   artistName: t.artistName,
+                  artistUsername: t.artistUsername,
                   artistId: t.artistId,
                   coverUrl: t.coverUrl ?? null,
+                  audioUrl: t.audioUrl ?? null,
+                  durationSeconds: t.durationSeconds,
+                  publishedPriceUsdc: t.publishedPriceUsdc,
                   ratePerStreamUsdc: t.rateUsdc,
                   totalEarningsUsdc: t.totalEarningsUsdc,
                   totalPlays: t.totalPlays,
@@ -208,10 +244,15 @@ export default async function HomePage() {
                 key={`new-${t.id}`}
                 track={{
                   id: t.id,
+                  slug: t.slug,
                   title: t.title,
                   artistName: t.artistName,
+                  artistUsername: t.artistUsername,
                   artistId: t.artistId,
                   coverUrl: t.coverUrl ?? null,
+                  audioUrl: t.audioUrl ?? null,
+                  durationSeconds: t.durationSeconds,
+                  publishedPriceUsdc: t.publishedPriceUsdc,
                   ratePerStreamUsdc: t.rateUsdc,
                   recommendedBy: 'new',
                 }}

@@ -1,16 +1,21 @@
 'use client';
 
-import Link from 'next/link';
 import { Play, Sparkles, Zap } from 'lucide-react';
 import { motion } from 'framer-motion';
+import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 
 export type TrackCardData = {
   id: string;
+  slug?: string;
   title: string;
   artistName: string;
   artistId?: string;
+  artistUsername?: string;
   coverUrl?: string | null;
+  audioUrl?: string | null;
+  durationSeconds?: number;
+  publishedPriceUsdc?: string;
   ratePerStreamUsdc: number;
   totalEarningsUsdc?: number;
   totalPlays?: number;
@@ -34,9 +39,36 @@ const AGENT_LABEL: Record<NonNullable<TrackCardData['recommendedBy']>, string> =
 export function TrackCard({ track, variant = 'default' }: Props) {
   const showWhy = !!track.recommendedBy && track.recommendedBy !== 'trending' && track.recommendedBy !== 'new';
 
+  // Click handler — dispatch pazzera:play so the layout-level
+  // PlayerBar starts audio. If no audioUrl, fall through to the link.
+  const handleClick = (e: React.MouseEvent) => {
+    if (track.audioUrl) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('pazzera:play', {
+            detail: {
+              id: track.id,
+              slug: track.slug ?? track.id,
+              title: track.title,
+              artistName: track.artistName,
+              artistUsername: track.artistUsername ?? '',
+              coverUrl: track.coverUrl ?? '',
+              audioUrl: track.audioUrl,
+              durationSeconds: track.durationSeconds ?? 0,
+              publishedPriceUsdc: track.publishedPriceUsdc ?? String(track.ratePerStreamUsdc),
+            },
+          }),
+        );
+      }
+    }
+  };
+
   return (
     <Link
       href={`/song/${track.id}`}
+      onClick={handleClick}
       className="card card-hover-lift group relative block w-[180px] shrink-0 md:w-auto"
     >
       {/* Cover */}
