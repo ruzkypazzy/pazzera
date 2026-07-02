@@ -111,8 +111,7 @@ export async function getHomeFeed(): Promise<HomeFeed> {
         where: { status: 'completed', settledAt: { gte: since } },
         _sum: { amountUsdc: true },
         _count: { _all: true },
-        orderBy: { _sum: { amountUsdc: 'desc' } },
-        take: 12,
+        take: 50, // grab more so we can sort manually after (Prisma groupBy can't orderBy on _sum)
       }) as any,
     [],
   );
@@ -132,7 +131,12 @@ export async function getHomeFeed(): Promise<HomeFeed> {
       )
     : [];
   const songById = new Map<string, any>(trendingSongs.map((s: any) => [s.id, s]));
-  const trending: FeedTrack[] = trendingRaw
+  // Sort trendingRaw by _sum.amountUsdc desc (Prisma groupBy can't
+  // orderBy on _sum, so we sort manually).
+  const sortedTrendingRaw = [...trendingRaw].sort(
+    (a, b) => Number(b._sum?.amountUsdc ?? 0) - Number(a._sum?.amountUsdc ?? 0),
+  );
+  const trending: FeedTrack[] = sortedTrendingRaw
     .map((r) => {
       const song = songById.get(r.songId);
       if (!song) return null;
@@ -154,7 +158,8 @@ export async function getHomeFeed(): Promise<HomeFeed> {
         totalPlays: r._count._all,
       } as FeedTrack;
     })
-    .filter((t): t is FeedTrack => t !== null);
+    .filter((t): t is FeedTrack => t !== null)
+    .slice(0, 12);
 
   // ---- New releases: most recent uploaded songs ----
   const newReleasesRaw = await safeQuery(

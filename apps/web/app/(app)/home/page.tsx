@@ -6,6 +6,7 @@ import { TrackCard } from '@/components/cards/TrackCard';
 import { PlaylistCard } from '@/components/cards/PlaylistCard';
 import { SectionRow } from '@/components/cards/SectionRow';
 import { BecomeArtistButton } from '@/components/artist/BecomeArtistButton';
+import { PlayButton } from '@/components/cards/PlayButton';
 import { getCurrentSession } from '@/lib/session';
 import { prisma } from '@pazzera/core';
 import { getHomeFeed } from '@/lib/queries/home';
@@ -136,33 +137,17 @@ export default async function HomePage() {
                 <div className="mt-1 truncate text-2xl font-extrabold text-white md:text-3xl">{madeForYou.title}</div>
                 <div className="mt-1 text-sm text-[#B3B3B3]">by {madeForYou.artistName}</div>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
-                  {madeForYou.audioUrl ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (typeof window !== 'undefined') {
-                          window.dispatchEvent(
-                            new CustomEvent('pazzera:play', {
-                              detail: {
-                                id: madeForYou.id,
-                                slug: madeForYou.slug ?? madeForYou.id,
-                                title: madeForYou.title,
-                                artistName: madeForYou.artistName,
-                                artistUsername: madeForYou.artistUsername ?? '',
-                                coverUrl: madeForYou.coverUrl ?? '',
-                                audioUrl: madeForYou.audioUrl,
-                                durationSeconds: madeForYou.durationSeconds ?? 0,
-                                publishedPriceUsdc: madeForYou.publishedPriceUsdc ?? '0.003',
-                              },
-                            }),
-                          );
-                        }
-                      }}
-                      className="btn-primary !py-2 !px-4 text-sm"
-                    >▶ Play</button>
-                  ) : (
-                    <Link href={`/song/${madeForYou.id}`}><button className="btn-primary !py-2 !px-4 text-sm">▶ Play</button></Link>
-                  )}
+                  <PlayButton
+                    trackId={madeForYou.id}
+                    audioUrl={madeForYou.audioUrl}
+                    title={madeForYou.title}
+                    artistName={madeForYou.artistName}
+                    artistUsername={madeForYou.artistUsername}
+                    coverUrl={madeForYou.coverUrl}
+                    durationSeconds={madeForYou.durationSeconds}
+                    publishedPriceUsdc={madeForYou.publishedPriceUsdc}
+                    slug={madeForYou.slug}
+                  />
                   <span className="badge-pay">${madeForYou.rateUsdc.toFixed(4)} / stream</span>
                   <span className="badge-arc">Settled on Arc</span>
                 </div>
