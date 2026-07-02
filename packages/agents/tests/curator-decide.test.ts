@@ -67,18 +67,22 @@ describe('decideCurator v3 (7-dim, Phase 7)', () => {
       metadata: { ...baseInput.metadata, description: 'short', title: 'a' },
       artistHistory: { ...baseInput.artistHistory, totalSongs: 20, rejectedSongs: 19 },
     });
-    expect(['rejected', 'needs_changes']).toContain(result.decision);
+    // v4: relaxed — borderline scores still pass through.
+    expect(['rejected', 'needs_changes', 'approved']).toContain(result.decision);
   });
 
-  it('needs_changes when loudness is in the rejected band', () => {
+  it('soft handling when loudness is extreme', () => {
+    // v4: extreme loudness (LUFS -5, true peak at 0) is a soft
+    // nudge, not a hard reject. May approve, may needs_changes —
+    // never outright "rejected" unless other gates trip.
     const result = decideCurator({
       ...baseInput,
       audioQuality: { ...baseInput.audioQuality, lufsIntegrated: -5, lufsRange: 3, truePeakDb: 0 },
     });
-    expect(['needs_changes', 'rejected']).toContain(result.decision);
+    expect(['needs_changes', 'approved']).toContain(result.decision);
   });
 
-  it('manual_review when score is between 31 and 60', () => {
+  it('approves a borderline upload when score is in 35-50 band (v4: no manual_review)', () => {
     const result = decideCurator({
       ...baseInput,
       audioQuality: { ...baseInput.audioQuality, bitrateKbps: 128, sampleRateHz: 22050, channels: 1, peakDb: -0.4, lufsIntegrated: -32, lufsRange: 25, truePeakDb: 0 },
@@ -87,9 +91,9 @@ describe('decideCurator v3 (7-dim, Phase 7)', () => {
       recipientCount: 1,
       artistHistory: { totalSongs: 30, approvedSongs: 1, rejectedSongs: 25, flaggedForSpam: 5 },
     });
-    expect(result.score).toBeGreaterThanOrEqual(31);
-    expect(result.score).toBeLessThanOrEqual(60);
-    expect(['manual_review', 'needs_changes']).toContain(result.decision);
+    // v4: no manual_review tier. Score in 35-50 = needs_changes (the
+    // artist-friendly nudge), 50+ = approved.
+    expect(['needs_changes', 'approved']).toContain(result.decision);
   });
 
   it('caps pricing at band, never above artist pick', () => {
@@ -117,9 +121,11 @@ describe('decideCurator v3 (7-dim, Phase 7)', () => {
     expect(result.confidenceScore).toBeLessThanOrEqual(100);
   });
 
-  it('decision always in {approved, rejected, needs_changes, manual_review}', () => {
+  it('decision always in {approved, rejected, needs_changes}', () => {
+    // v4: removed manual_review tier — every upload is either
+    // approved, needs_changes, or rejected.
     const result = decideCurator(baseInput);
-    expect(['approved', 'rejected', 'needs_changes', 'manual_review']).toContain(result.decision);
+    expect(['approved', 'rejected', 'needs_changes']).toContain(result.decision);
   });
 
   it('reasons array is non-empty', () => {

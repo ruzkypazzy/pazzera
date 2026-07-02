@@ -369,7 +369,10 @@ async function maybeAdvanceToCurator(songId: string) {
   if (!s) return;
   if (s.status === 'metadata_extracted' && s.waveformKey && s.previewKey && s.coverThumbKey && s.coverMediumKey) {
     await transition(songId, 'waveform_generated');
-    await enqueue.uploadCurator({ uploadId: songId, songId, sourceKey: '', steps: ['curator'] });
+    // Enqueue to the SAME queue the curator worker subscribes to
+    // (agent-curator). The upload-curator queue is registered but
+    // no worker is bound to it, so jobs would sit there forever.
+    await enqueue.curator({ songId });
     await transition(songId, 'curator_queued');
   }
 }

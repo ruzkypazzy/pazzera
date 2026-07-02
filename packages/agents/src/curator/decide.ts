@@ -95,18 +95,21 @@ export interface CuratorDecisionInternal extends CuratorDecision {
   scoreBreakdown: CuratorCategoryScores & { totalRaw: number; normalized: number };
 }
 
-const REJECT_THRESHOLD = 31;
-const NEEDS_CHANGES_AUDIO_THRESHOLD = 6;
-const NEEDS_CHANGES_LOUDNESS_THRESHOLD = 4;
-const MANUAL_REVIEW_THRESHOLD = 60;
-const FRAUD_REJECT_THRESHOLD = 6;
+// v4: relaxed thresholds — curator is an assist gate, not a mastering
+// inspector. Most real uploads from bedroom producers / streaming-
+// mastered tracks should pass.
+const REJECT_THRESHOLD = 25;
+const NEEDS_CHANGES_AUDIO_THRESHOLD = 4;
+const NEEDS_CHANGES_LOUDNESS_THRESHOLD = 3;
+const APPROVE_THRESHOLD = 35; // anything at or above this → approved
+const FRAUD_REJECT_THRESHOLD = 4;
 
 const PRICE_BANDS: Array<{ min: number; max: number; price: number }> = [
-  { min: 96, max: 101, price: 0.005 },
-  { min: 86, max: 96, price: 0.004 },
-  { min: 71, max: 86, price: 0.003 },
-  { min: 51, max: 71, price: 0.002 },
-  { min: 31, max: 51, price: 0.001 },
+  { min: 86, max: 101, price: 0.005 },
+  { min: 71, max: 86, price: 0.004 },
+  { min: 51, max: 71, price: 0.003 },
+  { min: 35, max: 51, price: 0.002 },
+  { min: 25, max: 35, price: 0.001 },
 ];
 
 function clampInt(n: number, lo: number, hi: number): number {
@@ -187,12 +190,14 @@ export function decideCurator(input: CuratorInput): CuratorDecisionInternal {
   if (input.audioQuality.channels >= 2) audio += 2;
   else audio += 1;
   if (input.audioQuality.codec === 'flac' || input.audioQuality.codec === 'mp3') audio += 1;
-  if (input.audioQuality.peakDb !== undefined && input.audioQuality.peakDb > -1) {
-    audio -= 3;
-    reasons.push('Audio clips heavily (peak > -1 dBFS)');
-  } else if (input.audioQuality.peakDb !== undefined && input.audioQuality.peakDb > -3) {
+  if (input.audioQuality.peakDb !== undefined && input.audioQuality.peakDb > -0.5) {
+    // v4: only treat true full-scale clipping (> -0.5 dBFS) as a
+    // problem, and only as a soft nudge. Streaming-loud masters
+    // (peak -0.5 to -1 dBFS) are fine.
     audio -= 1;
-    reasons.push('Audio peaks above -3 dBFS (possible clipping)');
+    reasons.push('Audio peaks very close to 0 dBFS — consider leaving a touch more headroom');
+  } else if (input.audioQuality.peakDb !== undefined && input.audioQuality.peakDb > -3) {
+    audio -= 0; // warm masters are fine
   } else {
     audio += 2;
   }
@@ -227,17 +232,20 @@ export function decideCurator(input: CuratorInput): CuratorDecisionInternal {
     if (lr > 18) {
       loudness -= 3;
       reasons.push('Excessive dynamic range (>18 LU) — hard to listen in noisy environments');
-    } else if (lr < 4) {
-      loudness -= 4;
-      reasons.push('Audio is over-compressed (LU range < 4) — likely mastering abuse');
+    } else if (lr < 2) {
+      // v4: only brick-walled masters (LU range < 2) are flagged.
+      // Modern streaming loudness (3-6 LU) is normal and loud.
+      loudness -= 2;
+      reasons.push('Audio is heavily compressed (LU range < 2) — consider more dynamics');
     } else {
       loudness += 2;
     }
   }
+  // v4: true-peak warning only above -0.1 dBTP, as a soft nudge.
   if (input.audioQuality.truePeakDb !== undefined && input.audioQuality.truePeakDb !== null) {
-    if (input.audioQuality.truePeakDb > -0.5) {
-      loudness -= 3;
-      reasons.push('True peak above -0.5 dBTP — intersample clipping risk');
+    if (input.audioQuality.truePeakDb > -0.1) {
+      loudness -= 1;
+      reasons.push('True peak very close to 0 dBTP — intersample peaks may clip on some devices');
     }
   }
   rawMetrics.lufsIntegrated = input.audioQuality.lufsIntegrated ?? null;
@@ -331,22 +339,23 @@ export function decideCurator(input: CuratorInput): CuratorDecisionInternal {
     categoryScores.marketability;
   const normalized = Math.round((totalRaw / 140) * 100);
 
-  // ─── Decision (use normalized) ──────────────────────────────
+  // ─── Decision (use normalized) — v4 relaxed ─────────────────
   let decision: CuratorDecision['decision'];
-  if (normalized < REJECT_THRESHOLD) {
-    decision = 'rejected';
-  } else if (categoryScores.duplicateRisk === 0) {
+  if (categoryScores.duplicateRisk === 0) {
     decision = 'rejected';
   } else if (categoryScores.spamRisk < FRAUD_REJECT_THRESHOLD) {
+    decision = 'rejected';
+  } else if (normalized < REJECT_THRESHOLD) {
     decision = 'rejected';
   } else if (categoryScores.audioQuality < NEEDS_CHANGES_AUDIO_THRESHOLD) {
     decision = 'needs_changes';
   } else if (categoryScores.loudness < NEEDS_CHANGES_LOUDNESS_THRESHOLD) {
     decision = 'needs_changes';
     reasons.push('Audio loudness is in the rejection band — please re-master');
-  } else if (normalized < MANUAL_REVIEW_THRESHOLD) {
-    decision = 'manual_review';
-    reasons.push(`Normalized score ${normalized}/100 below auto-approval threshold (60) — admin review required`);
+  } else if (normalized < APPROVE_THRESHOLD) {
+    // Borderline — needs_changes nudge, not blocked.
+    decision = 'needs_changes';
+    reasons.push(`Normalized score ${normalized}/100 in the borderline band (35-50) — re-upload once you've polished for a higher tier`);
   } else {
     decision = 'approved';
   }
