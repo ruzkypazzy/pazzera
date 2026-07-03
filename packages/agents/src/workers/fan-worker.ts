@@ -146,6 +146,138 @@ async function loadStreamSignals(streamId: string): Promise<FanInput | null> {
  * intact for backward compatibility (other packages import the
  * socket contract types) but is no longer the source of truth.
  */
+
+/**
+ * Ensure the listener has enough USDC in their Circle Gateway Balance
+ * to pay for streams. If their balance is below `minBalanceBaseUnits`,
+ * kick off a deposit (approve + deposit) for `topUpAmountBaseUnits` USDC.
+ * Throttled to one top-up per listener per `cooldownMs`.
+ *
+ * No-op when the wallet is not a Circle DCW (or hasn't been provisioned
+ * with a providerWalletId yet). Network errors are logged and swallowed
+ * so a flaky deposit doesn't kill the payment path.
+ */
+async function ensureListenerGatewayBalance(opts: {
+  userId: string;
+  streamId: string;
+  listenerWallet: {
+    id: string;
+    provider: string;
+    providerWalletId: string | null;
+    lastGatewayTopUpAt: Date | null;
+  };
+  minBalanceBaseUnits: bigint;
+  topUpAmountBaseUnits: bigint;
+  cooldownMs: number;
+}) {
+  const { userId, streamId, listenerWallet } = opts;
+  if (listenerWallet.provider !== 'circle-dcw' || !listenerWallet.providerWalletId) {
+    return;
+  }
+
+  // Cooldown check: skip if we topped up recently.
+  if (
+    listenerWallet.lastGatewayTopUpAt &&
+    Date.now() - listenerWallet.lastGatewayTopUpAt.getTime() < opts.cooldownMs
+  ) {
+    return;
+  }
+
+  const { getActiveProvider } = await import('@pazzera/blockchain/circle/factory');
+  const provider = getActiveProvider();
+  if (!provider || provider.constructor.name !== 'CircleRealProvider') {
+    return; // Mock provider — skip.
+  }
+
+  // Query current Gateway Balance via the Circle API.
+  const gatewayUrl =
+    process.env.CIRCLE_GATEWAY_FACILITATOR_URL || 'https://gateway-api-testnet.circle.com';
+  let currentBalanceBaseUnits = 0n;
+  try {
+    const w = await prisma.wallet.findUnique({
+      where: { id: listenerWallet.id },
+      select: { address: true },
+    });
+    if (!w?.address) return;
+    const balancesRes = await fetch(`${gatewayUrl}/v1/balances`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.CIRCLE_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        token: 'USDC',
+        sources: [{ depositor: w.address, domain: 26 }],
+      }),
+    });
+    if (!balancesRes.ok) return;
+    const balancesJson: any = await balancesRes.json();
+    const bal = balancesJson?.balances?.[0]?.balance ?? '0';
+    currentBalanceBaseUnits = BigInt(Math.floor(parseFloat(bal) * 1_000_000));
+  } catch (err) {
+    logger.warn({ err, userId, streamId }, 'fan:gateway_topup:balance_query_failed');
+    return;
+  }
+  if (currentBalanceBaseUnits >= opts.minBalanceBaseUnits) {
+    return; // already enough
+  }
+
+  logger.info(
+    {
+      userId,
+      streamId,
+      currentBalanceBaseUnits: currentBalanceBaseUnits.toString(),
+      topUpAmountBaseUnits: opts.topUpAmountBaseUnits.toString(),
+    },
+    'fan:gateway_topup:starting',
+  );
+
+  const usdcContract = '0x3600000000000000000000000000000000000000';
+  const gatewayWallet = '0x0077777d7EBA4688BDeF3E311b846F25870A19B9';
+  const topUpAmountStr = opts.topUpAmountBaseUnits.toString();
+
+  try {
+    const approve = await (provider as any).executeContract({
+      walletId: listenerWallet.providerWalletId,
+      contractAddress: usdcContract,
+      abiFunctionSignature: 'approve(address,uint256)',
+      abiParameters: [gatewayWallet, topUpAmountStr],
+      blockchain: 'ARC-TESTNET',
+      feeLevel: 'MEDIUM',
+    });
+    if (!approve?.data?.id) {
+      logger.warn({ userId, streamId, approve }, 'fan:gateway_topup:approve_no_id');
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 10000));
+    const deposit = await (provider as any).executeContract({
+      walletId: listenerWallet.providerWalletId,
+      contractAddress: gatewayWallet,
+      abiFunctionSignature: 'deposit(address,uint256)',
+      abiParameters: [usdcContract, topUpAmountStr],
+      blockchain: 'ARC-TESTNET',
+      feeLevel: 'MEDIUM',
+    });
+    if (!deposit?.data?.id) {
+      logger.warn({ userId, streamId, deposit }, 'fan:gateway_topup:deposit_no_id');
+      return;
+    }
+    logger.info(
+      { userId, streamId, approveTxId: approve.data.id, depositTxId: deposit.data.id },
+      'fan:gateway_topup:submitted',
+    );
+
+    await prisma.wallet
+      .update({
+        where: { id: listenerWallet.id },
+        data: { lastGatewayTopUpAt: new Date() },
+      })
+      .catch(() => undefined);
+  } catch (err) {
+    logger.warn({ err, userId, streamId }, 'fan:gateway_topup:failed');
+  }
+}
+
 export async function runSignAndSettle(opts: {
   streamId: string;
   userId: string;
@@ -200,6 +332,25 @@ export async function runSignAndSettle(opts: {
     await emitPaymentFailed(streamId, 'chain_error', 'Artist wallet unavailable');
     return;
   }
+
+  // 2b. Ensure the listener has enough Gateway Balance to pay. Circle
+  //     Gateway settles by debiting a pre-funded Gateway Balance, NOT
+  //     by pulling on-chain USDC per payment. If the balance is low,
+  //     top it up from the listener's on-chain USDC via approve +
+  //     deposit (two on-chain txs). This is the same flow users
+  //     would run manually via `scripts/deposit-to-gateway.ts`; we
+  //     automate it so demo / first-time listeners don't have to.
+  //     Each top-up happens at most once per process (the lock is
+  //     per-listener; safe across worker restarts via the `lastGatewayTopUpAt`
+  //     timestamp on Wallet).
+  await ensureListenerGatewayBalance({
+    userId,
+    streamId,
+    listenerWallet,
+    minBalanceBaseUnits: 5_000_000n,        // 5 USDC minimum
+    topUpAmountBaseUnits: 10_000_000n,     // +10 USDC per top-up
+    cooldownMs: 24 * 3600 * 1000,            // once per listener per 24h
+  });
 
   // 3. Build the x402 envelope. Use bytes32 nonce (EIP-712 expects
   // bytes32; the realtime nonce is a friendly opaque string we keep

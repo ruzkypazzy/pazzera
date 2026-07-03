@@ -169,6 +169,41 @@ export class CircleRealProvider implements CircleProvider {
     return r;
   }
 
+  /**
+   * Execute a smart contract call from a Circle Developer-Controlled
+   * Wallet. Used by the fan-worker to auto-deposit listener USDC into
+   * the Gateway Wallet when their Gateway Balance is low.
+   *
+   * Reference: https://developers.circle.com/api-reference/wallets/developer-controlled-wallets/create-developer-transaction-contract-execution
+   */
+  async executeContract(input: {
+    walletId: string;
+    contractAddress: string;
+    abiFunctionSignature: string;
+    abiParameters: (string | number)[];
+    blockchain?: string;
+    feeLevel?: 'LOW' | 'MEDIUM' | 'HIGH';
+  }): Promise<{ data?: { id?: string; state?: string; txHash?: string } }> {
+    const idempotencyKey = randomUUID();
+    const entitySecretCiphertext = await this.freshEntityCiphertext();
+    const r = await this.request<{ data?: { id?: string; state?: string; txHash?: string } }>({
+      method: 'POST',
+      url: `${this.baseUrl}/v1/w3s/developer/transactions/contractExecution`,
+      body: {
+        idempotencyKey,
+        walletId: input.walletId,
+        contractAddress: input.contractAddress,
+        abiFunctionSignature: input.abiFunctionSignature,
+        abiParameters: input.abiParameters.map(String),
+        feeLevel: input.feeLevel ?? 'MEDIUM',
+        blockchain: input.blockchain ?? 'ARC-TESTNET',
+        entitySecretCiphertext,
+      },
+      idempotencyKey,
+    });
+    return r;
+  }
+
   async signTypedData(input: { walletId: string; typedData: unknown }): Promise<{ v: number; r: Hex; s: Hex }> {
     // Per Circle's docs (POST /v1/w3s/developer/sign/typedData):
     // the body requires walletId, entitySecretCiphertext,

@@ -148,6 +148,7 @@ model Wallet {
   x402DailyCapUsdc     String?   // max nano-payment authorization per day
   x402PerStreamCapUsdc String?   // max per single stream authorization
   x402AuthorizedAt     DateTime? // last time the user granted an x402 scope
+  lastGatewayTopUpAt   DateTime? // last auto-deposit to Circle Gateway Balance
 
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
