@@ -115,7 +115,7 @@ export function TopHeader({
               className="h-2 w-2 animate-pulse rounded-full"
               style={{ background: '#00D4AA', boxShadow: '0 0 10px #00D4AA' }}
             />
-            <span className="text-xs font-bold tabular-nums text-white">{effectiveBalance}</span>
+            <span className="text-xs font-bold tabular-nums text-white">{walletBalance}</span>
             <span className="text-[10px] font-semibold uppercase tracking-wider text-[#00D4AA]">USDC</span>
           </Link>
 
@@ -161,7 +161,7 @@ export function TopHeader({
                 >
                   <div className="border-b border-[#282828] px-4 py-3">
                     <div className="text-sm font-semibold text-white">{accountLabel}</div>
-                    <div className="text-xs text-[#B3B3B3]">{effectiveBalance} USDC</div>
+                    <div className="text-xs text-[#B3B3B3]">{walletBalance} USDC</div>
                   </div>
                   <MenuLink href="/profile" icon={<User className="h-4 w-4" />}>Profile</MenuLink>
                   <MenuLink href="/dashboard" icon={<LayoutDashboard className="h-4 w-4" />}>Dashboard</MenuLink>
