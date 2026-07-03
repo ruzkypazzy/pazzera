@@ -19,4 +19,5 @@ export {
 } from './stream-aggregator';
 export * from './nonce-store';
 export * from './event-log';
+export * from './event-bridge';
 export * as legacySession from './session';

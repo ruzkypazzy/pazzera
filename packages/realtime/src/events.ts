@@ -86,6 +86,8 @@ export interface SocketData {
   invalidPayloads?: number;
   /** ISO most-recent tick timestamp. */
   lastTickAt?: number;
+  /** One-shot guard so threshold_crossed is emitted once per stream. */
+  thresholdEmitted?: boolean;
 }
 
 export type { PlaybackTickPayload } from './protocol';
