@@ -170,9 +170,12 @@ export class CircleRealProvider implements CircleProvider {
   }
 
   async signTypedData(input: { walletId: string; typedData: unknown }): Promise<{ v: number; r: Hex; s: Hex }> {
-    // Per Circle's docs: POST /v1/w3s/developer/sign/typedData.
-    // Requires entitySecretCiphertext. The wallet id identifies which
-    // DCW key to sign with; the typed data is the EIP-712 payload.
+    // Per Circle's docs (POST /v1/w3s/developer/sign/typedData):
+    // the body requires walletId, entitySecretCiphertext,
+    // idempotencyKey, and a `data` field that is the JSON-stringified
+    // EIP-712 typed-data payload (NOT the object itself — Circle
+    // string-parses it server-side). BigInts inside the payload must
+    // be decimal strings (handled in `request()`).
     const idempotencyKey = randomUUID();
     const entitySecretCiphertext = await this.freshEntityCiphertext();
     const r = await this.request<{ data?: { signature?: string; v?: string | number; r?: string; s?: string } }>({
@@ -182,7 +185,11 @@ export class CircleRealProvider implements CircleProvider {
         idempotencyKey,
         entitySecretCiphertext,
         walletId: input.walletId,
-        typedData: input.typedData,
+        // Circle expects `data` to be the JSON-stringified typedData,
+        // with BigInts as decimal strings.
+        data: JSON.stringify(input.typedData, (_k, v) =>
+          typeof v === 'bigint' ? v.toString() : v,
+        ),
       },
       idempotencyKey,
     });
