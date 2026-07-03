@@ -30,9 +30,9 @@ export function TopHeader({ isArtist = false, isAdmin = false, walletBalance = '
   const [liveUsername, setLiveUsername] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/auth/session', { credentials: 'include' })
+    void fetch('/api/auth/session', { credentials: 'include' })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
+      .then((d: any) => {
         if (cancelled || !d?.authenticated) return;
         if (typeof d.wallet?.balanceUsdc !== 'undefined' && d.wallet?.balanceUsdc !== null) {
           setLiveBalance(Number(d.wallet.balanceUsdc).toFixed(2));
@@ -50,7 +50,7 @@ export function TopHeader({ isArtist = false, isAdmin = false, walletBalance = '
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [setLiveBalance, setLiveIsArtist, setLiveRole, setLiveDisplayName, setLiveUsername]);
 
   const effectiveIsArtist = liveIsArtist ?? isArtist;
   const effectiveIsAdmin = isAdmin || liveRole === 'admin';
