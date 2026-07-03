@@ -14,6 +14,7 @@
  */
 import { type Address, type Hex } from 'viem';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { appendFileSync } from 'node:fs';
 import { getEnv, logger } from '@pazzera/core';
 import {
   CircleError,
@@ -217,6 +218,13 @@ export class CircleRealProvider implements CircleProvider {
   }
 
   async settleX402(input: CircleX402SettleInput): Promise<CircleX402SettleResult> {
+    if (process.env.DEBUG_X402_SETTLE) {
+      // eslint-disable-next-line no-console
+      console.log('[settleX402] input:', JSON.stringify({
+        ...input,
+        authorization: { ...input.authorization, r: input.authorization.r.slice(0, 10) + '...', s: input.authorization.s.slice(0, 10) + '...' },
+      }, null, 2));
+    }
     const idempotencyKey = randomBytes(16).toString('hex');
     // Per Circle Gateway / x402 spec, POST /v1/x402/settle expects:
     //   {
@@ -278,6 +286,21 @@ export class CircleRealProvider implements CircleProvider {
       payload,
       extensions: {},
     };
+    // Persist every settle attempt to a JSONL log so we can compare
+    // successful vs failing envelopes side-by-side. Always-on (cheap).
+    try {
+      appendFileSync(
+        '/tmp/pazzera-x402-settle.log',
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          paymentRequirements,
+          paymentPayload: {
+            ...paymentPayload,
+            payload: { ...paymentPayload.payload, signature: paymentPayload.payload.signature.slice(0, 18) + '...' },
+          },
+        }) + '\n',
+      );
+    } catch { /* ignore */ }
     const r = await this.request<CircleX402SettleResult>({
       method: 'POST',
       url: `${this.gatewayUrl}/v1/x402/settle`,

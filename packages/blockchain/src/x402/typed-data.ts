@@ -65,6 +65,27 @@ export function getEip712Domain() {
   };
 }
 
+/**
+ * EIP-712 domain for Circle Gateway batched nanopayments.
+ *
+ * Per Circle's SDK reference:
+ *   'createPaymentPayload constructs and signs the EIP-3009 message
+ *    ... [over] domain { name: 'GatewayWalletBatched', version: '1',
+ *    chainId, verifyingContract: Gateway Wallet contract address }'
+ *
+ * Gateway Wallet (testnet): 0x0077777d7EBA4688BDeF3E311b846F25870A19B9
+ * Same address on every EVM testnet.
+ */
+export function getGatewayEip712Domain() {
+  const env = getEnv();
+  return {
+    name: 'GatewayWalletBatched' as const,
+    version: '1' as const,
+    chainId: env.ARC_CHAIN_ID,
+    verifyingContract: ('0x0077777d7EBA4688BDeF3E311b846F25870A19B9') as Address,
+  };
+}
+
 export const EIP712_TYPES = {
   TransferWithAuthorization: [
     { name: 'from', type: 'address' },

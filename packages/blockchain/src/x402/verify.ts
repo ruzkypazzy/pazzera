@@ -12,6 +12,7 @@
 import { type Address, type Hex, recoverTypedDataAddress, hashTypedData } from 'viem';
 import {
   getEip712Domain,
+  getGatewayEip712Domain,
   EIP712_TYPES,
   isAuthorizationFresh,
   type TransferWithAuthorization,
@@ -51,8 +52,16 @@ export async function verifyAuthorizationSignature(envelope: X402Authorization):
   const sigHex = `${envelope.r}${envelope.s.slice(2)}${v27.toString(16).padStart(2, '0')}` as Hex;
   let recovered: Address;
   try {
+    // Choose domain by asset — gateway batched uses Gateway Wallet,
+    // plain USDC facet uses the USDC contract. Fall back to USDC.
+    const domain =
+      envelope.asset &&
+      typeof envelope.asset === 'string' &&
+      envelope.asset.toLowerCase() === '0x0077777d7eba4688bdef3e311b846f25870a19b9'
+        ? getGatewayEip712Domain()
+        : getEip712Domain();
     recovered = await recoverTypedDataAddress({
-      domain: getEip712Domain(),
+      domain,
       types: EIP712_TYPES,
       primaryType: 'TransferWithAuthorization',
       message: {
