@@ -1,56 +1,39 @@
+'use client';
+
 import React from 'react';
-import { headers } from 'next/headers';
-import { prisma, getCurrentSession } from '@pazzera/core';
 import { TopHeader } from './TopHeader';
 import { BottomNav } from './BottomNav';
+import { useShellUser } from './ShellUserContext';
 
 type Props = {
   children: React.ReactNode;
   isArtist?: boolean;
   isAdmin?: boolean;
   walletBalance?: string;
+  displayName?: string;
+  username?: string;
 };
 
 /**
- * Server-side shell: resolves the current session + wallet balance via
- * Prisma on every render, then passes authoritative values to the
- * client TopHeader/BottomNav. This is the source of truth for role +
- * balance shown in the header pill and the avatar dropdown — regardless
- * of whether the calling page set the prop or not.
+ * Client shell. Source of truth for role + wallet balance is the
+ * `ShellUserContext` populated by `app/(app)/layout.tsx` (server-side
+ * Prisma fetch on every navigation). Explicit props win over the
+ * context so a page can override (rare).
  */
-export async function AppShell({
+export function AppShell({
   children,
   isArtist: isArtistProp,
   isAdmin: isAdminProp,
   walletBalance: walletBalanceProp,
+  displayName: displayNameProp,
+  username: usernameProp,
 }: Props) {
-  const session = await getCurrentSession();
-  let isArtist = !!isArtistProp;
-  let isAdmin = !!isAdminProp;
-  let walletBalance = walletBalanceProp ?? '0.00';
-  let displayName: string | undefined;
-  let username: string | undefined;
-  if (session) {
-    const [user, wallet] = await Promise.all([
-      prisma.user.findUnique({
-        where: { id: session.userId },
-        select: { isArtist: true, role: true, displayName: true, username: true },
-      }),
-      prisma.wallet.findUnique({
-        where: { userId: session.userId },
-        select: { balanceUsdc: true },
-      }),
-    ]);
-    if (user) {
-      isArtist = isArtist || !!user.isArtist || user.role === 'artist';
-      isAdmin = isAdmin || user.role === 'admin';
-      displayName = user.displayName ?? undefined;
-      username = user.username ?? undefined;
-    }
-    if (wallet?.balanceUsdc != null) {
-      walletBalance = Number(wallet.balanceUsdc).toFixed(2);
-    }
-  }
+  const ctx = useShellUser();
+  const isArtist = isArtistProp ?? ctx.isArtist;
+  const isAdmin = isAdminProp ?? ctx.isAdmin;
+  const walletBalance = walletBalanceProp ?? ctx.walletBalance;
+  const displayName = displayNameProp ?? ctx.displayName;
+  const username = usernameProp ?? ctx.username;
 
   return (
     <div className="min-h-screen" style={{ background: '#0A0A0A' }}>
