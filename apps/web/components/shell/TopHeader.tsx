@@ -6,37 +6,30 @@ import { useEffect, useRef, useState } from 'react';
 import { Search, Bell, ChevronDown, User, Settings, LogOut, LayoutDashboard, Upload, Wallet as WalletIcon, Music } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { PazzeraLogo } from '@/components/logo';
-import { useSessionStore } from './SessionBootstrap';
 
 type Props = {
   isArtist?: boolean;
   isAdmin?: boolean;
   walletBalance?: string; // pre-formatted USDC, e.g. "12.45"
+  displayName?: string;
+  username?: string;
 };
 
-export function TopHeader({ isArtist = false, isAdmin = false, walletBalance = '0.00' }: Props) {
+export function TopHeader({
+  isArtist = false,
+  isAdmin = false,
+  walletBalance = '0.00',
+  displayName,
+  username,
+}: Props) {
   const pathname = usePathname();
   const [searchOpen, setSearchOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
-  // Live session data fetched by SessionBootstrap on mount.
-  const liveBalance = useSessionStore((s) => s.walletBalance);
-  const liveIsArtist = useSessionStore((s) => s.isArtist);
-  const liveRole = useSessionStore((s) => s.role);
-  const liveDisplayName = useSessionStore((s) => s.displayName);
-  const liveUsername = useSessionStore((s) => s.username);
-
-  const effectiveIsArtist = liveIsArtist ?? isArtist;
-  const effectiveIsAdmin = isAdmin || liveRole === 'admin';
-  const effectiveBalance = liveBalance ?? walletBalance;
-  const roleLabel = effectiveIsAdmin
-    ? 'Admin'
-    : effectiveIsArtist
-      ? 'Artist'
-      : 'Listener';
-  const accountLabel = liveDisplayName || liveUsername
-    ? `${liveDisplayName || liveUsername} · ${roleLabel}`
+  const roleLabel = isAdmin ? 'Admin' : isArtist ? 'Artist' : 'Listener';
+  const accountLabel = displayName || username
+    ? `${displayName || username} · ${roleLabel}`
     : `Pazzera ${roleLabel}`;
 
   // Close avatar menu on outside click
