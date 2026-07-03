@@ -21,7 +21,14 @@ async function main() {
   const hostname = '0.0.0.0';
   const port = Number(process.env.PORT ?? 3000);
 
-  const app = next({ dev, hostname, port });
+  // next-standalone places .next under apps/web/.next. cwd may be
+  // /app, so resolve it explicitly.
+  const path = await import('node:path');
+  const url = await import('node:url');
+  const here = path.dirname(url.fileURLToPath(import.meta.url));
+  const appsWebDir = path.resolve(here);
+
+  const app = next({ dev, hostname, port, dir: appsWebDir });
   const handle = app.getRequestHandler();
   await app.prepare();
 
