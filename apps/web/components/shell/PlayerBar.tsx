@@ -10,6 +10,9 @@ import {
   pause as realtimePause,
   resume as realtimeResume,
   disconnect as realtimeDisconnect,
+  subscribePaymentDue,
+  subscribePaymentSettled,
+  subscribePaymentFailed,
 } from '@/lib/realtime-client';
 
 export type Track = {
@@ -34,6 +37,10 @@ type Props = {
 };
 
 const PAYMENT_THRESHOLD = 0.25; // Pazzera spec: 25% triggers the USDC charge
+// Badge states driven by real payment_settled / payment_failed events
+// from the realtime server. 'idle' = before due, 'pending' = payment_due
+// arrived but not yet settled/failed, 'settled' = paid, 'failed' = error.
+type PaymentBadgeState = 'idle' | 'pending' | 'settled' | 'failed';
 
 export function PlayerBar({
   track: trackProp,
@@ -51,6 +58,11 @@ export function PlayerBar({
   const [liked, setLiked] = useState(false);
   const [internalIsPlaying, setInternalIsPlaying] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [paymentBadge, setPaymentBadge] = useState<PaymentBadgeState>('idle');
+  // The server-signed settlement path emits one pair of events per
+  // stream. We key off streamId so swapping tracks in the queue resets
+  // the badge until the new track's payment events arrive.
+  const paymentStreamIdRef = useRef<string | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Pull from global current-track store. If a `track` prop is also
@@ -80,9 +92,53 @@ export function PlayerBar({
     };
   }, []);
 
+  // Subscribe to the realtime payment events. The server emits
+  // payment_due / payment_settled / payment_failed for the active
+  // stream. We update the badge from these events, not from local
+  // progress. When the track changes we reset to 'idle' until the
+  // new stream's events arrive.
+  useEffect(() => {
+    const offDue = subscribePaymentDue((p) => {
+      const v = p as { streamId?: string };
+      if (v?.streamId && paymentStreamIdRef.current && v.streamId !== paymentStreamIdRef.current) return;
+      if (v?.streamId) paymentStreamIdRef.current = v.streamId;
+      setPaymentBadge('pending');
+    });
+    const offSettled = subscribePaymentSettled((p) => {
+      const v = p as { streamId?: string };
+      if (v?.streamId && paymentStreamIdRef.current && v.streamId !== paymentStreamIdRef.current) return;
+      if (v?.streamId) paymentStreamIdRef.current = v.streamId;
+      setPaymentBadge('settled');
+    });
+    const offFailed = subscribePaymentFailed((p) => {
+      const v = p as { streamId?: string };
+      if (v?.streamId && paymentStreamIdRef.current && v.streamId !== paymentStreamIdRef.current) return;
+      if (v?.streamId) paymentStreamIdRef.current = v.streamId;
+      setPaymentBadge('failed');
+    });
+    return () => {
+      offDue();
+      offSettled();
+      offFailed();
+    };
+  }, []);
+
   // The displayed track — prop wins over store (prop is for legacy AppShell)
   const track = trackProp ?? storeTrack;
   const playing = isPlayingProp || storeIsPlaying || internalIsPlaying;
+
+  // Reset the badge when the displayed track changes.
+  useEffect(() => {
+    paymentStreamIdRef.current = null;
+    setPaymentBadge('idle');
+  }, [track?.id]);
+
+  // Best-known duration for the current track in seconds, used as a
+  // fallback when the <audio> element doesn't have metadata yet.
+  const trackDurationSec =
+    (track as any)?.durationSec ??
+    (track as any)?.durationSeconds ??
+    0;
 
   // Listen for "pazzera:play" events dispatched from song pages / cards.
   // Detail shape: { id, title, artistName, coverUrl, audioUrl,
@@ -232,6 +288,8 @@ export function PlayerBar({
   }, [setStoreIsPlaying, currentUserId, track?.id, trackDurationSec]);
 
   // Reset progress when track changes
+
+  // Reset progress when track changes
   useEffect(() => {
     setProgress(0);
     setElapsedSecState(0);
@@ -280,19 +338,20 @@ export function PlayerBar({
     };
   }, []);
 
-  // `track` is `Track | CurrentTrack`. Track uses `durationSec`,
-  // CurrentTrack uses `durationSeconds`. Pull from either.
-  const trackDurationSec =
-    (track as any)?.durationSec ??
-    (track as any)?.durationSeconds ??
-    0;
+  // `trackDurationSec` is declared earlier (line ~88) so the audio
+  // event listener effect can use it. Just compute the real-duration
+  // view here.
   const effectiveDurationSec = realDuration ?? trackDurationSec;
 
   const rate =
     (track as any)?.ratePerStreamUsdc ??
     Number((track as any)?.publishedPriceUsdc ?? 0.003);
   const elapsedSec = elapsedSecState;
-  const triggered = paymentTriggered ?? progress >= PAYMENT_THRESHOLD;
+  // The progress-bar threshold marker is purely visual (where the
+  // 25% line is drawn). The actual 'Paid' badge in the corner is
+  // driven exclusively by the realtime payment_settled event
+  // (state `paymentBadge`), NOT by local progress — the user
+  // explicitly asked for this in Fix 5.
   const elapsedStr = formatTime(elapsedSec);
   const durationStr = formatTime(effectiveDurationSec);
 
@@ -443,15 +502,6 @@ export function PlayerBar({
                 style={{ left: `${PAYMENT_THRESHOLD * 100}%` }}
                 title="Payment threshold — 25% triggers USDC charge"
               />
-              {/* Animated "triggered" highlight bar */}
-              {triggered && (
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="absolute inset-y-0 w-0.5 rounded-full bg-[#10B981]"
-                  style={{ left: `${PAYMENT_THRESHOLD * 100}%`, boxShadow: '0 0 8px #10B981' }}
-                />
-              )}
             </div>
             <span className="w-10 text-[10px] tabular-nums text-[#B3B3B3]">{durationStr}</span>
           </div>
@@ -459,22 +509,49 @@ export function PlayerBar({
 
         {/* Right: live USDC ticker + volume */}
         <div className="flex items-center gap-3" style={{ width: '30%', justifyContent: 'flex-end' }}>
-          <AnimatePresence>
-            {triggered ? (
+          <AnimatePresence mode="wait">
+            {paymentBadge === 'settled' ? (
               <motion.div
+                key="paid"
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 transition={{ type: 'spring', damping: 14, stiffness: 220 }}
                 className="hidden items-center gap-1.5 rounded-full border border-[#10B981]/40 bg-[#10B981]/15 px-3 py-1.5 md:flex"
-                title="USDC per stream charged at 25% mark"
+                title="USDC per stream settled on Arc"
               >
                 <Zap className="h-3.5 w-3.5 fill-[#10B981] text-[#10B981]" />
                 <span className="text-[10px] font-bold uppercase tracking-wider text-[#10B981]">Paid</span>
               </motion.div>
-            ) : (
+            ) : paymentBadge === 'pending' ? (
               <motion.div
+                key="pending"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="hidden items-center gap-1.5 rounded-full border border-[#F59E0B]/40 bg-[#F59E0B]/10 px-3 py-1.5 md:flex"
+                title="Payment due — settling on Arc"
+              >
+                <Sparkles className="h-3.5 w-3.5 text-[#F59E0B]" />
+                <span className="text-[10px] font-bold uppercase tracking-wider text-[#F59E0B]">Settling</span>
+              </motion.div>
+            ) : paymentBadge === 'failed' ? (
+              <motion.div
+                key="failed"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="hidden items-center gap-1.5 rounded-full border border-red-500/40 bg-red-500/10 px-3 py-1.5 md:flex"
+                title="Settlement failed"
+              >
+                <Zap className="h-3.5 w-3.5 text-red-400" />
+                <span className="text-[10px] font-bold uppercase tracking-wider text-red-400">Failed</span>
+              </motion.div>
+            ) : (
+              <motion.div
+                key="listening"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
                 className="hidden items-center gap-1.5 rounded-full border border-[#00D4AA]/30 bg-[#00D4AA]/10 px-3 py-1.5 md:flex"
                 title="Listening — charge will trigger at 25% of the song"
               >

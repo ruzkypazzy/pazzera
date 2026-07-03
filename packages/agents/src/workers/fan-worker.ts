@@ -10,7 +10,9 @@
 import { Worker, type Job } from 'bullmq';
 import { getQueueConnection, QUEUE_NAMES } from '@pazzera/queue';
 import { prisma } from '@pazzera/db';
-import { logger } from '@pazzera/core';
+import { logger, getEnv } from '@pazzera/core';
+import { WalletService, FacilitatorService } from '@pazzera/blockchain';
+import { newNonce } from '@pazzera/blockchain/services/eip712';
 import { decideFan, type FanInput } from '../fan/decide';
 import { recordDecision } from '../utils/record-decision';
 import { AgentHealthTracker } from '../utils/agent-health';
@@ -113,6 +115,215 @@ async function loadStreamSignals(streamId: string): Promise<FanInput | null> {
   };
 }
 
+/**
+ * Server-side x402 sign-and-settle (Fix 3).
+ *
+ * Listener wallets are Circle Developer-Controlled Wallets (DCW), so the
+ * platform holds the signing material. We:
+ *   1. Issue a one-time nonce and emit `payment_due` for UX.
+ *   2. Build the EIP-3009 TransferWithAuthorization envelope (from
+ *      listener, to song's primary artist, value in USDC base units,
+ *      fresh validAfter/validBefore window).
+ *   3. Sign via WalletService.signX402Authorization (Circle DCW
+ *      POST /v1/w3s/developer/sign/typedData). The per-stream and
+ *      daily caps inside that helper raise on overage; we treat
+ *      those as payment_failed.
+ *   4. Persist a Payment row (status=pending) and call
+ *      FacilitatorService.settle() to submit the envelope to Circle
+ *      Gateway. The facilitator verifies the signature, submits the
+ *      settlement, and the service updates Payment.status='settled'
+ *      with the txHash + enqueues the Split worker.
+ *   5. Emit `payment_settled` or `payment_failed` to the stream room
+ *      using the realtime helpers.
+ *
+ * The realtime server's old `payment_authorized` handler is kept
+ * intact for backward compatibility (other packages import the
+ * socket contract types) but is no longer the source of truth.
+ */
+export async function runSignAndSettle(opts: {
+  streamId: string;
+  userId: string;
+  songId: string;
+  amountUsdc: string;
+  classification: string;
+}): Promise<void> {
+  const { streamId, userId, songId, amountUsdc, classification } = opts;
+  const env = getEnv();
+
+  // Lazy import — avoids pulling the realtime / blockchain server-only
+  // code into any unit-test environment that doesn't have a live DB.
+  const { emitPaymentDue, emitPaymentSettled, emitPaymentFailed, issueAndStoreNonce } = await import('@pazzera/realtime');
+  const { usdcToBaseUnits } = await import('@pazzera/blockchain/adapters/usdc');
+
+  const tier = ((['0.001', '0.002', '0.003', '0.004', '0.005'] as const).find(
+    (t) => Number.parseFloat(t) === Number.parseFloat(amountUsdc),
+  ) ?? '0.003') as '0.001' | '0.002' | '0.003' | '0.004' | '0.005';
+
+  // 1. Informational payment_due + nonce. Persists PaymentNonce row.
+  const nonce = await issueAndStoreNonce({ streamId, userId, amountUsdc });
+  await emitPaymentDue({
+    streamId,
+    songId,
+    amountUsdc,
+    pricingTier: tier,
+    authorizationRequired: false, // server signs, client doesn't have to
+    nonce,
+  });
+
+  // 2. Resolve listener wallet + artist wallet.
+  const [listenerWallet, song] = await Promise.all([
+    prisma.wallet.findUnique({ where: { userId } }),
+    prisma.song.findUnique({
+      where: { id: songId },
+      select: { id: true, artistId: true, publishedPriceUsdc: true },
+    }),
+  ]);
+  if (!listenerWallet || listenerWallet.status !== 'active' || !listenerWallet.address) {
+    logger.warn({ streamId, userId }, 'fan:sign_and_settle:no_listener_wallet');
+    await emitPaymentFailed(streamId, 'chain_error', 'Listener wallet unavailable');
+    return;
+  }
+  if (!song) {
+    logger.warn({ streamId, songId }, 'fan:sign_and_settle:no_song');
+    await emitPaymentFailed(streamId, 'chain_error', 'Song not found');
+    return;
+  }
+  const artistWallet = await prisma.wallet.findUnique({ where: { userId: song.artistId } });
+  if (!artistWallet || !artistWallet.address) {
+    logger.warn({ streamId, songId, artistId: song.artistId }, 'fan:sign_and_settle:no_artist_wallet');
+    await emitPaymentFailed(streamId, 'chain_error', 'Artist wallet unavailable');
+    return;
+  }
+
+  // 3. Build the x402 envelope. Use bytes32 nonce (EIP-712 expects
+  // bytes32; the realtime nonce is a friendly opaque string we keep
+  // for the audit log; the bytes32 version is derived from it).
+  const validAfter = Math.floor(Date.now() / 1000) - 30;
+  const validBefore = Math.floor(Date.now() / 1000) + 600;
+  const valueBaseUnits = usdcToBaseUnits(amountUsdc).toString();
+  const eip712Nonce = newNonce();
+
+  // 4. Create the Payment row up front so FacilitatorService has a
+  // stable id to mark settled. The unique-by-streamId constraint
+  // means a second fan-worker run for the same stream would conflict
+  // — that's intentional (idempotency).
+  let payment;
+  try {
+    payment = await prisma.payment.create({
+      data: {
+        streamId,
+        songId,
+        payerUserId: userId,
+        amountUsdc,
+        amountBaseUnits: valueBaseUnits,
+        status: 'pending',
+      },
+    });
+  } catch (err) {
+    logger.warn({ err, streamId }, 'fan:sign_and_settle:payment_create_failed');
+    await emitPaymentFailed(streamId, 'chain_error', 'Could not persist payment');
+    return;
+  }
+
+  await prisma.paymentEvent.create({
+    data: {
+      kind: 'payment_due',
+      paymentId: payment.id,
+      streamId,
+      songId,
+      userId,
+      amountUsdc,
+      severity: 0,
+      meta: { nonce, classification, serverSigned: true },
+    },
+  }).catch(() => undefined);
+
+  // 5. Sign via DCW. signX402Authorization enforces per-stream +
+  // daily caps; on cap-exceeded it throws AppError('CONFLICT'). We
+  // treat that as a payment_failed (no retry loop — the helper has
+  // already counted it against the daily cap).
+  let signed;
+  try {
+    signed = await WalletService.signX402Authorization({
+      userId,
+      walletId: listenerWallet.id,
+      to: artistWallet.address as `0x${string}`,
+      valueBaseUnits,
+      validAfter,
+      validBefore,
+      nonce: eip712Nonce,
+      chainId: Number(env.ARC_CHAIN_ID),
+      usdcContract: env.USDC_CONTRACT_ADDRESS as `0x${string}`,
+    });
+  } catch (err: any) {
+    logger.warn({ err, streamId, userId }, 'fan:sign_and_settle:sign_failed');
+    const reason = err?.code === 'CONFLICT' ? 'rate_limited' : 'chain_error';
+    await prisma.payment.update({
+      where: { id: payment.id },
+      data: { status: 'failed' },
+    }).catch(() => undefined);
+    await emitPaymentFailed(streamId, reason, err?.message ?? 'Sign failed');
+    return;
+  }
+
+  // 6. Settle via Circle Gateway facilitator.
+  const outcome = await FacilitatorService.settle({
+    paymentId: payment.id,
+    envelope: {
+      from: listenerWallet.address as `0x${string}`,
+      to: artistWallet.address as `0x${string}`,
+      value: valueBaseUnits,
+      validAfter: String(validAfter),
+      validBefore: String(validBefore),
+      nonce: eip712Nonce,
+      v: signed.v,
+      r: signed.r,
+      s: signed.s,
+    },
+    nonce,
+  });
+
+  if (!outcome.ok) {
+    logger.warn({ streamId, paymentId: payment.id, reason: outcome.reason }, 'fan:sign_and_settle:settle_failed');
+    // Defensive: FacilitatorService.settle() already marks the row
+    // failed via recordFailure, but we update it here too so the
+    // Payment row is consistent even if the helper is mocked or the
+    // helper path is bypassed.
+    await prisma.payment
+      .update({
+        where: { id: payment.id },
+        data: { status: 'failed' },
+      })
+      .catch(() => undefined);
+    await emitPaymentFailed(
+      streamId,
+      outcome.reason === 'insufficient_balance' ? 'insufficient_balance' : 'chain_error',
+      outcome.reason ?? 'settle_failed',
+    );
+    return;
+  }
+
+  logger.info(
+    {
+      streamId,
+      paymentId: payment.id,
+      txHash: outcome.txHash,
+      blockNumber: outcome.blockNumber,
+      amountUsdc,
+    },
+    'fan:sign_and_settle:settled',
+  );
+
+  await emitPaymentSettled(streamId, {
+    paymentId: payment.id,
+    songId,
+    amountUsdc,
+    recipientCount: 0, // split worker fills this in after fanout
+    txHash: outcome.txHash!,
+    payoutStatus: 'pending',
+  });
+}
+
 export async function runFanWorker() {
   const worker = new Worker(
     QUEUE_NAMES.agentFan,
@@ -199,37 +410,31 @@ export async function runFanWorker() {
         // The realtime server also writes a PaymentNonce + PaymentEvent row; idempotency
         // is enforced by the consumeNonce() check on settlement.
         if (decision.shouldCharge) {
-          try {
-            const { emitPaymentDue, issueAndStoreNonce } = await import('@pazzera/realtime');
-            const song = await prisma.song.findUnique({
-              where: { id: input.songId },
-              select: { publishedPriceUsdc: true },
-            });
-            const amountUsdc = String(song?.publishedPriceUsdc ?? decision.signals.suggestedPriceUsdc ?? '0.003');
-            const tier = ((['0.001', '0.002', '0.003', '0.004', '0.005'] as const).find((t) => Number.parseFloat(t) === Number.parseFloat(amountUsdc)) ?? '0.003') as '0.001' | '0.002' | '0.003' | '0.004' | '0.005';
-            const nonce = await issueAndStoreNonce({ streamId, userId: input.userId, amountUsdc });
-            await emitPaymentDue({
-              streamId,
-              songId: input.songId,
-              amountUsdc,
-              pricingTier: tier,
-              authorizationRequired: true,
-              nonce,
-            });
-            await prisma.paymentEvent.create({
-              data: {
-                kind: 'payment_due',
-                streamId,
-                songId: input.songId,
-                userId: input.userId,
-                amountUsdc,
-                severity: 0,
-                meta: { nonce, classification: decision.classification },
-              },
-            }).catch(() => undefined);
-          } catch (err) {
-            logger.warn({ err }, 'fan:payment_due_emit_failed');
-          }
+          // Server-side sign-and-settle (Fix 3). The listener uses a
+          // Circle Developer-Controlled Wallet, so the platform holds
+          // the signing keys — there is no client-side signing. We
+          // build the x402 envelope, sign it via WalletService, persist
+          // a Payment row, then call FacilitatorService.settle() to
+          // submit the EIP-3009 TransferWithAuthorization to Circle
+          // Gateway. payment_due is still emitted to the listener for
+          // UX, but it is informational only — the actual settle runs
+          // here.
+          await runSignAndSettle({
+            streamId,
+            userId: input.userId,
+            songId: input.songId,
+            amountUsdc: String(
+              (
+                await prisma.song.findUnique({
+                  where: { id: input.songId },
+                  select: { publishedPriceUsdc: true },
+                })
+              )?.publishedPriceUsdc ?? decision.signals.suggestedPriceUsdc ?? '0.003',
+            ),
+            classification: decision.classification,
+          }).catch((err) => {
+            logger.warn({ err, streamId }, 'fan:sign_and_settle_failed');
+          });
         }
 
         await tracker.success(Date.now() - started);
