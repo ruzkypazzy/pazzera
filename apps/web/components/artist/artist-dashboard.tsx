@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { UploadDialog } from './upload-dialog';
+import { GatewayBalanceCard } from '@/components/wallet/gateway-balance-card';
 
 interface ArtistData {
   earnings: { totalUsdc: string; monthUsdc: string; todayUsdc: string };
@@ -55,6 +56,11 @@ export function ArtistDashboard({ initial }: { initial: ArtistData | null }) {
           </Button>
         </div>
       </header>
+
+      {/* Gateway Balance — earnings from stream payments + withdraw-to-onchain */}
+      <div className="max-w-3xl">
+        <GatewayBalanceCard role="artist" />
+      </div>
 
       {/* KPI cards */}
       <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
