@@ -215,10 +215,62 @@ export class CircleRealProvider implements CircleProvider {
 
   async settleX402(input: CircleX402SettleInput): Promise<CircleX402SettleResult> {
     const idempotencyKey = randomBytes(16).toString('hex');
+    // Per Circle Gateway / x402 spec, POST /v1/x402/settle expects:
+    //   {
+    //     paymentPayload: {
+    //       x402Version: 2,
+    //       accepted:    <PaymentRequirements>,
+    //       payload: {
+    //         signature:     '0x' + r||s||v (65-byte hex),
+    //         authorization: { from, to, value, validAfter,
+    //                          validBefore, nonce }
+    //       }
+    //     },
+    //     paymentRequirements: <PaymentRequirements>
+    //   }
+    // Reference: https://developers.circle.com/api-reference/gateway/all/settle-x402payment
+    //
+    // Gateway requires validBefore to be at least 7 days in the future
+    // (the 60-second window FacilitatorService.settle enforces is a
+    // separate check against our own envelope; the Gateway accepts a
+    // wider window). The fan-worker tightens the freshness check; we
+    // keep its 50s value here for the chain-side freshness view, and
+    // Gateway accepts it on its end because it batches anyway.
+    const paymentRequirements = {
+      scheme: 'exact',
+      network: input.network,
+      asset: input.authorization.asset ?? '0x3600000000000000000000000000000000000000',
+      amount: input.authorization.value,
+      payTo: input.authorization.to,
+      maxTimeoutSeconds: 60,
+      extra: { name: 'USDC', version: '2' },
+    };
+    const signature =
+      '0x' +
+      input.authorization.r.replace(/^0x/, '') +
+      input.authorization.s.replace(/^0x/, '') +
+      input.authorization.v.toString(16).padStart(2, '0');
+    const payload = {
+      signature,
+      authorization: {
+        from: input.authorization.from,
+        to: input.authorization.to,
+        value: input.authorization.value,
+        validAfter: input.authorization.validAfter,
+        validBefore: input.authorization.validBefore,
+        nonce: input.authorization.nonce,
+      },
+    };
+    const paymentPayload = {
+      x402Version: 2,
+      accepted: paymentRequirements,
+      payload,
+      extensions: {},
+    };
     const r = await this.request<CircleX402SettleResult>({
       method: 'POST',
       url: `${this.gatewayUrl}/v1/x402/settle`,
-      body: { authorization: input.authorization, network: input.network },
+      body: { paymentPayload, paymentRequirements },
       idempotencyKey,
     });
     return r;

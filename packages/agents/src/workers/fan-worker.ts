@@ -289,6 +289,7 @@ export async function runSignAndSettle(opts: {
       v: signed.v,
       r: signed.r,
       s: signed.s,
+      asset: env.USDC_CONTRACT_ADDRESS as `0x${string}`,
     },
     nonce,
   });

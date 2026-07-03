@@ -90,6 +90,8 @@ export interface CircleX402SettleInput {
     v: number;
     r: `0x${string}`;
     s: `0x${string}`;
+    /** Asset (USDC contract) — required by Gateway /x402/settle. */
+    asset?: `0x${string}`;
   };
   /** Network, e.g. "eip155:5042002". */
   network: string;

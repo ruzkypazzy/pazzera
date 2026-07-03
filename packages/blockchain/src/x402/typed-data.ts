@@ -34,6 +34,8 @@ export interface X402Authorization {
   v: number;
   r: Hex;
   s: Hex;
+  /** Asset contract address (e.g. USDC). Required for x402 Gateway. */
+  asset?: Address;
 }
 
 /** Network identifier in CAIP-2-ish form, e.g. "eip155:5042002" for Arc. */
