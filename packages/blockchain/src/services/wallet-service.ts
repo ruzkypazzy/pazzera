@@ -368,6 +368,17 @@ export class WalletService {
     nonce: Hex;
     chainId: number;
     usdcContract: Address;
+    /**
+     * EIP-712 scheme variant:
+     *   - 'usdc-facet' (default) — standard USDC EIP-3009 with
+     *     domain { name:'USDC', version:'2', verifyingContract:USDC }.
+     *     For Coinbase / x.org facilitator.
+     *   - 'gateway-batched' — Circle Gateway batching scheme with
+     *     domain { name:'GatewayWalletBatched', version:'1',
+     *     verifyingContract:Gateway Wallet }.
+     *     For Circle Gateway /v1/x402/settle batched flow.
+     */
+    scheme?: 'usdc-facet' | 'gateway-batched';
   }): Promise<{ v: number; r: Hex; s: Hex; platformSigned: boolean }> {
     const wallet = await prisma.wallet.findUnique({ where: { id: opts.walletId } });
     if (!wallet) throw new AppError('NOT_FOUND', 'Wallet not found', 404);
@@ -412,6 +423,25 @@ export class WalletService {
     // secret and Circle returns the signature.
     if (wallet.provider === 'circle-dcw' || wallet.provider === 'circle-ucw') {
       const circle = getCircleProvider();
+      const scheme = opts.scheme ?? 'usdc-facet';
+      // EIP-712 domain depends on the settlement scheme.
+      //  - usdc-facet: domain={name:'USDC', version:'2', verifyingContract:USDC}
+      //  - gateway-batched: domain={name:'GatewayWalletBatched', version:'1',
+      //    verifyingContract: Gateway Wallet}
+      const domain =
+        scheme === 'gateway-batched'
+          ? {
+              name: 'GatewayWalletBatched',
+              version: '1',
+              chainId: opts.chainId,
+              verifyingContract: ('0x0077777d7EBA4688BDeF3E311b846F25870A19B9') as Address,
+            }
+          : {
+              name: 'USDC',
+              version: '2',
+              chainId: opts.chainId,
+              verifyingContract: opts.usdcContract,
+            };
       const sig = await (circle as CircleRealProvider).signTypedData({
         walletId: wallet.providerWalletId,
         typedData: {
@@ -432,12 +462,7 @@ export class WalletService {
             ],
           },
           primaryType: 'TransferWithAuthorization',
-          domain: {
-            name: 'USDC',
-            version: '2',
-            chainId: opts.chainId,
-            verifyingContract: opts.usdcContract,
-          },
+          domain,
           message: {
             from: wallet.address as Address,
             to: opts.to,

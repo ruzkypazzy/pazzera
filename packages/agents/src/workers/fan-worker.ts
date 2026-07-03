@@ -205,18 +205,18 @@ export async function runSignAndSettle(opts: {
   // bytes32; the realtime nonce is a friendly opaque string we keep
   // for the audit log; the bytes32 version is derived from it).
   //
-  // IMPORTANT — TWO competing constraints:
-  //   1. Our local FacilitatorService.isAuthorizationFresh rejects
-  //      validBefore > now + 60s (x402 freshness spec).
-  //   2. Circle Gateway's batched settler REQUIRES validBefore to be
-  //      at least 7 days + small buffer in the future. Shorter windows
-  //      return errorReason='authorization_validity_too_short'.
+  // CRITICAL — Circle Gateway batching uses a DIFFERENT EIP-712 domain
+  // than USDC's standard TransferWithAuthorization:
+  //   Domain name:    'GatewayWalletBatched' (not 'USDC')
+  //   Domain version: '1' (not '2')
+  //   verifyingContract: Gateway Wallet (0x0077777d7EBA4688BDeF3E311b846F25870A19B9)
+  //                      NOT the USDC contract.
   //
-  // To satisfy both: build the envelope with validBefore = now + 7d
-  // (Gateway minimum) and update isAuthorizationFresh to skip the
-  // 60s check when the envelope is destined for Gateway batch settle.
-  // The nonce single-use guard in consumeNonce + the 24h replay cache
-  // in Redis together prevent real-time replay even with a wide window.
+  // Reference: https://developers.circle.com/gateway/nanopayments/references/sdk
+  //   createPaymentPayload() signs over this Gateway domain.
+  //
+  // validBefore must be at least 3 days in the future (Circle SDK
+  // reference: authorization_validity_too_short if shorter).
   const validAfter = Math.floor(Date.now() / 1000) - 60;
   const validBefore = Math.floor(Date.now() / 1000) + 7 * 24 * 3600;
   const valueBaseUnits = usdcToBaseUnits(amountUsdc).toString();
@@ -273,6 +273,7 @@ export async function runSignAndSettle(opts: {
       nonce: eip712Nonce,
       chainId: Number(env.ARC_CHAIN_ID),
       usdcContract: env.USDC_CONTRACT_ADDRESS as `0x${string}`,
+      scheme: 'gateway-batched',
     });
   } catch (err: any) {
     logger.warn({ err, streamId, userId }, 'fan:sign_and_settle:sign_failed');
