@@ -216,9 +216,10 @@ export async function runSignAndSettle(opts: {
   //   createPaymentPayload() signs over this Gateway domain.
   //
   // validBefore must be at least 3 days in the future (Circle SDK
-  // reference: authorization_validity_too_short if shorter).
+  // reference: authorization_validity_too_short if shorter). Use 30d
+  // to be safely above the threshold.
   const validAfter = Math.floor(Date.now() / 1000) - 60;
-  const validBefore = Math.floor(Date.now() / 1000) + 7 * 24 * 3600;
+  const validBefore = Math.floor(Date.now() / 1000) + 30 * 24 * 3600;
   const valueBaseUnits = usdcToBaseUnits(amountUsdc).toString();
   const eip712Nonce = newNonce();
 
