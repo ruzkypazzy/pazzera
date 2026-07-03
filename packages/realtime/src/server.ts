@@ -99,10 +99,13 @@ export async function startRealtimeServer(
   if (io) return io;
 
   let httpServer: import('node:http').Server;
+  let port: number;
   if (typeof httpOrPort === 'object' && httpOrPort !== null) {
     httpServer = httpOrPort;
+    port = portOrUndefined ?? Number(process.env.PORT ?? 3001);
   } else {
     httpServer = createServer();
+    port = httpOrPort ?? Number(process.env.PORT ?? 3001);
   }
 
   io = new Server<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>(httpServer, {
@@ -381,9 +384,18 @@ export async function startRealtimeServer(
   // Only bind a port if we created the http server ourselves.
   // When an external server was passed in, it's owned by the caller
   // (e.g. Next.js custom server) — they handle listen() themselves.
-  if (typeof httpOrPort !== 'object') {
-    httpServer.listen(port ?? Number(process.env.PORT ?? 3001), async () => {
-      logger.info({ port: port ?? Number(process.env.PORT ?? 3001) }, 'realtime:listening');
+  if (typeof httpOrPort === 'number' || httpOrPort === undefined) {
+    httpServer.listen(port, async () => {
+      logger.info({ port }, 'realtime:listening');
+      if (process.env.DEMO_MODE === 'true') {
+        const { startDemoLoop } = await import('./demo-simulator');
+        startDemoLoop();
+      }
+    });
+  } else if (typeof httpOrPort !== 'object') {
+    // shouldn't happen, defensive
+    httpServer.listen(port, async () => {
+      logger.info({ port }, 'realtime:listening');
       if (process.env.DEMO_MODE === 'true') {
         const { startDemoLoop } = await import('./demo-simulator');
         startDemoLoop();
