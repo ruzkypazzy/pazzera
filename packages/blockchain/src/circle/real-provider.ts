@@ -239,7 +239,15 @@ export class CircleRealProvider implements CircleProvider {
       const res = await fetch(opts.url, {
         method: opts.method,
         headers,
-        body: opts.body ? JSON.stringify(opts.body) : undefined,
+        // EIP-712 typedData carries BigInts (chainId, value, validAfter,
+        // validBefore). JSON.stringify throws on BigInt by default —
+        // use a recursive replacer that emits them as decimal strings
+        // (Circle's API accepts stringified uint256 values).
+        body: opts.body
+          ? JSON.stringify(opts.body, (_k, v) =>
+              typeof v === 'bigint' ? v.toString() : v,
+            )
+          : undefined,
       });
       const text = await res.text();
       let json: unknown = null;
