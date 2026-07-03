@@ -120,9 +120,18 @@ export class FacilitatorService {
     // 4b. Nonce single-use (Redis + Postgres). Defense in depth — the
     //     realtime server has already consumed the nonce, but if a path
     //     bypasses realtime this still rejects replay.
+    //
+    //     consumeNonce requires streamId to match the PaymentNonce row.
+    //     We fetch the streamId from the Payment row instead of passing
+    //     '' (which would always mismatch and falsely report replay).
     try {
       const { consumeNonce } = await import('@pazzera/realtime/nonce-store');
-      const fresh = await consumeNonce({ nonce: input.nonce, streamId: '' });
+      const paymentRow = await prisma.payment.findUnique({
+        where: { id: input.paymentId },
+        select: { streamId: true },
+      });
+      const streamId = paymentRow?.streamId ?? '';
+      const fresh = await consumeNonce({ nonce: input.nonce, streamId });
       if (!fresh) {
         await this.recordFailure(input.paymentId, 'replay_nonce', false);
         return { ok: false, reason: 'replay_nonce', retryable: false, latencyMs: Date.now() - started };
