@@ -519,4 +519,117 @@ export class WalletService {
     });
     return { v: sig.v, r: sig.r, s: sig.s, platformSigned: sig.platformSigned };
   }
+
+  /**
+   * Sign a Circle Gateway burn-intent (used for withdrawing USDC
+   * from the Gateway Balance back to the user's on-chain wallet).
+   *
+   * Distinct from signX402Authorization because:
+   *   - The typed-data envelope is the Gateway's BurnIntent, NOT the
+   *     x402 TransferWithAuthorization.
+   *   - Per-stream + daily x402 caps DO NOT apply — a burn-intent is
+   *     a user-initiated transfer of the user's own Gateway Balance,
+   *     not a stream payment.
+   *   - We don't write a walletTransaction row here because Gateway
+   *     withdrawals are settled out-of-band by the Gateway Minter
+   *     contract after batch close; we'll write the row when the
+   *     attestation is observed on-chain.
+   *
+   * Reference: https://developers.circle.com/gateway/references/api/transfer
+   */
+  static async signGatewayBurnIntent(opts: {
+    userId: string;
+    walletId: string;
+    burnIntent: {
+      maxBlockHeight: string;
+      maxFee: string;
+      spec: {
+        version: number;
+        sourceDomain: number;
+        destinationDomain: number;
+        sourceContract: string;
+        destinationContract: string;
+        sourceToken: string;
+        destinationToken: string;
+        sourceDepositor: string;
+        destinationRecipient: string;
+        sourceSigner: string;
+        destinationCaller: string;
+        value: string;
+        salt: string;
+        hookData: string;
+      };
+    };
+    chainId: number;
+  }): Promise<{ v: number; r: Hex; s: Hex }> {
+    const wallet = await prisma.wallet.findUnique({ where: { id: opts.walletId } });
+    if (!wallet) throw new AppError('NOT_FOUND', 'Wallet not found', 404);
+    if (wallet.userId !== opts.userId) throw new AppError('FORBIDDEN', 'Wallet mismatch', 403);
+    if (wallet.status !== 'active') {
+      throw new AppError('FORBIDDEN', `Wallet is ${wallet.status}`, 403);
+    }
+    if (wallet.provider !== 'circle-dcw' && wallet.provider !== 'circle-ucw') {
+      throw new AppError('FORBIDDEN', 'Only Circle wallets can sign Gateway burn-intents', 403);
+    }
+
+    const circle = getCircleProvider();
+    // BurnIntent EIP-712 domain — Circle Gateway Minter contract is
+    // the verifyingContract. Field names match Circle's BurnIntent
+    // struct exactly. The salt is the nonce.
+    const GATEWAY_MINTER = '0x0022222ABE238Cc2C7Bb1f21003F0a260052475B' as Address;
+    const sig = await (circle as CircleRealProvider).signTypedData({
+      walletId: wallet.providerWalletId!,
+      typedData: {
+        types: {
+          EIP712Domain: [
+            { name: 'name', type: 'string' },
+            { name: 'version', type: 'string' },
+            { name: 'chainId', type: 'uint256' },
+            { name: 'verifyingContract', type: 'address' },
+          ],
+          BurnIntent: [
+            { name: 'maxBlockHeight', type: 'uint256' },
+            { name: 'maxFee', type: 'uint256' },
+            { name: 'spec', type: 'BurnIntentSpec' },
+          ],
+          BurnIntentSpec: [
+            { name: 'version', type: 'uint256' },
+            { name: 'sourceDomain', type: 'uint32' },
+            { name: 'destinationDomain', type: 'uint32' },
+            { name: 'sourceContract', type: 'address' },
+            { name: 'destinationContract', type: 'address' },
+            { name: 'sourceToken', type: 'address' },
+            { name: 'destinationToken', type: 'address' },
+            { name: 'sourceDepositor', type: 'address' },
+            { name: 'destinationRecipient', type: 'address' },
+            { name: 'sourceSigner', type: 'address' },
+            { name: 'destinationCaller', type: 'address' },
+            { name: 'value', type: 'uint256' },
+            { name: 'salt', type: 'bytes32' },
+            { name: 'hookData', type: 'bytes' },
+          ],
+        },
+        primaryType: 'BurnIntent',
+        domain: {
+          name: 'GatewayWalletBatched',
+          version: '1',
+          chainId: opts.chainId,
+          verifyingContract: GATEWAY_MINTER,
+        },
+        message: {
+          maxBlockHeight: opts.burnIntent.maxBlockHeight,
+          maxFee: opts.burnIntent.maxFee,
+          spec: {
+            ...opts.burnIntent.spec,
+            hookData: opts.burnIntent.spec.hookData || '0x',
+          },
+        },
+      },
+    });
+    return {
+      v: (sig as { v?: number }).v ?? 0,
+      r: ((sig as { r?: Hex }).r ?? '0x') as Hex,
+      s: ((sig as { s?: Hex }).s ?? '0x') as Hex,
+    };
+  }
 }

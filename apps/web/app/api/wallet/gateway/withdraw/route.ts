@@ -112,27 +112,38 @@ export const POST = withApi(
       },
     };
 
-    // Sign the burn-intent as EIP-712 (typedData). The signer is the
-    // user's DCW, so we use Circle's signTypedData via the same path
-    // the Fan Agent uses for x402 — but with the Gateway Wallet as
-    // verifyingContract.
+    // Sign the burn-intent. We use a dedicated signer (NOT
+    // signX402Authorization) because:
+    //   - The typed-data envelope is the Gateway's BurnIntent struct,
+    //     not x402 TransferWithAuthorization.
+    //   - The per-stream + daily x402 caps (0.01 USDC / 5 USDC) do not
+    //     apply to a burn-intent — it's the user moving their own
+    //     Gateway Balance, not a stream payment.
     const { WalletService } = await import('@pazzera/blockchain');
-    const signed = await WalletService.signX402Authorization({
+    const signed = await WalletService.signGatewayBurnIntent({
       userId: session.userId,
       walletId: wallet.id,
-      // The Gateway burn-intent uses a slightly different envelope than
-      // x402 TransferWithAuthorization, but the signing primitive is
-      // the same: EIP-712 over a domain whose verifyingContract is the
-      // Gateway Wallet contract (and message is the burn-intent fields
-      // flattened). For the MVP, we hand the envelope to Circle directly.
-      to: wallet.address as `0x${string}`,
-      valueBaseUnits: amountBaseUnits.toString(),
-      validAfter: now - 60,
-      validBefore: now + 30 * 60,
-      nonce: salt as `0x${string}`,
       chainId: Number(env.ARC_CHAIN_ID),
-      usdcContract: env.USDC_CONTRACT_ADDRESS as `0x${string}`,
-      scheme: 'gateway-batched',
+      burnIntent: {
+        maxBlockHeight: BigInt(now + 30 * 60).toString(),
+        maxFee: '20000',
+        spec: {
+          version: 1,
+          sourceDomain: ARC_DOMAIN,
+          destinationDomain: ARC_DOMAIN,
+          sourceContract: GATEWAY_WALLET,
+          destinationContract: GATEWAY_MINTER,
+          sourceToken: USDC_CONTRACT,
+          destinationToken: USDC_CONTRACT,
+          sourceDepositor: wallet.address,
+          destinationRecipient: wallet.address,
+          sourceSigner: wallet.address,
+          destinationCaller: '0x0000000000000000000000000000000000000000',
+          value: amountBaseUnits.toString(),
+          salt,
+          hookData: '0x',
+        },
+      },
     });
 
     // Submit burn-intent to Gateway API.

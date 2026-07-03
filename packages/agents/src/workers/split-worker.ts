@@ -14,6 +14,7 @@ import { Worker, type Job } from 'bullmq';
 import { getQueueConnection, QUEUE_NAMES } from '@pazzera/queue';
 import { prisma } from '@pazzera/db';
 import { logger } from '@pazzera/core';
+import { usdcToBaseUnits } from '@pazzera/blockchain/adapters/usdc';
 import { decideSplit, type SplitInput } from '../split/decide';
 import { recordDecision } from '../utils/record-decision';
 import { AgentHealthTracker } from '../utils/agent-health';
@@ -111,7 +112,7 @@ export async function runSplitWorker() {
                 recipientRole: recipient.role,
                 splitPercentageBps: recipient.splitPercentageBps,
                 amountUsdc: split.amountUsdc,
-                amountBaseUnits: split.amountUsdc.replace('.', '').padEnd(8, '0'),
+                amountBaseUnits: usdcToBaseUnits(split.amountUsdc).toString(),
                 status: 'pending',
               },
             });
@@ -134,7 +135,7 @@ export async function runSplitWorker() {
                 toUserId: recipient.userId,
                 toWalletId: recipientWallet?.id ?? null,
                 grossAmountBaseUnits: payment.amountBaseUnits,
-                splitAmountBaseUnits: split.amountUsdc.replace('.', '').padEnd(8, '0'),
+                splitAmountBaseUnits: usdcToBaseUnits(split.amountUsdc).toString(),
                 direction: 'credit',
                 kind: 'royalty_payout',
                 status: 'pending',
