@@ -3,7 +3,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['tests/realtime-pure.test.ts'],
+    include: ['tests/realtime-pure.test.ts', 'tests/event-bridge.test.ts'],
     globals: false,
     testTimeout: 30_000,
   },

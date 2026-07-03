@@ -41,6 +41,7 @@ import {
 } from './stream-aggregator';
 import { issueAndStoreNonce, consumeNonce } from './nonce-store';
 import { recordEvent } from './event-log';
+import { publishRealtimeEvent, startRealtimeEventBridge } from './event-bridge';
 import type {
   ClientToServerEvents,
   ServerToClientEvents,
@@ -129,6 +130,13 @@ export async function startRealtimeServer(
     pingInterval: 15_000,
     pingTimeout: 8_000,
   });
+
+  // Relay events published by other processes (BullMQ workers) into
+  // local Socket.IO rooms. Without this, the fan/split workers'
+  // payment_due / payment_settled / payment_failed emits never reach
+  // the browser — the workers run in a separate process where the
+  // local `io` is null.
+  startRealtimeEventBridge(io);
 
   // ─── Auth middleware ─────────────────────────────────────────
   // The browser sends the same session cookie that the HTTP layer
@@ -407,8 +415,7 @@ export async function emitPaymentSettled(streamId: string, payload: {
   txHash: string;
   payoutStatus: 'pending' | 'processing' | 'completed' | 'partial_failure' | 'failed';
 }) {
-  if (!io) return;
-  io.of('/').to(`stream:${streamId}`).emit('payment_settled', {
+  const body = {
     streamId,
     paymentId: payload.paymentId,
     songId: payload.songId,
@@ -417,7 +424,13 @@ export async function emitPaymentSettled(streamId: string, payload: {
     txHash: payload.txHash,
     payoutStatus: payload.payoutStatus,
     settlesAt: Date.now(),
-  });
+  };
+  if (io) {
+    io.of('/').to(`stream:${streamId}`).emit('payment_settled', body);
+  } else {
+    // Worker process: no local Socket.IO server — bridge via Redis.
+    await publishRealtimeEvent(`stream:${streamId}`, 'payment_settled', body);
+  }
   adminCounters.paymentSettledLastMin.push({ ts: Date.now(), streamId });
   adminCounters.payment_settled_total += 1;
   await recordEvent({
@@ -443,8 +456,7 @@ export async function emitPaymentDue(opts: {
   authorizationRequired: boolean;
   nonce: string;
 }) {
-  if (!io) return;
-  io.of('/').to(`stream:${opts.streamId}`).emit('payment_due', {
+  const body = {
     songId: opts.songId,
     streamId: opts.streamId,
     amountUsdc: opts.amountUsdc,
@@ -452,7 +464,13 @@ export async function emitPaymentDue(opts: {
     authorizationRequired: opts.authorizationRequired,
     nonce: opts.nonce,
     expiresAtSec: Date.now() + 600_000,
-  });
+  };
+  if (io) {
+    io.of('/').to(`stream:${opts.streamId}`).emit('payment_due', body);
+  } else {
+    // Worker process: no local Socket.IO server — bridge via Redis.
+    await publishRealtimeEvent(`stream:${opts.streamId}`, 'payment_due', body);
+  }
   adminCounters.paymentDueLastMin.push({ ts: Date.now(), streamId: opts.streamId });
   adminCounters.payment_due_total += 1;
   await recordEvent({
@@ -465,12 +483,13 @@ export async function emitPaymentDue(opts: {
 }
 
 export async function emitPaymentFailed(streamId: string, reason: 'user_rejected' | 'expired' | 'insufficient_balance' | 'chain_error' | 'rate_limited', message: string) {
-  if (!io) return;
-  io.of('/').to(`stream:${streamId}`).emit('payment_failed', {
-    streamId,
-    reason,
-    message,
-  });
+  const body = { streamId, reason, message };
+  if (io) {
+    io.of('/').to(`stream:${streamId}`).emit('payment_failed', body);
+  } else {
+    // Worker process: no local Socket.IO server — bridge via Redis.
+    await publishRealtimeEvent(`stream:${streamId}`, 'payment_failed', body);
+  }
   await recordEvent({
     kind: 'payment_failed',
     streamId,
