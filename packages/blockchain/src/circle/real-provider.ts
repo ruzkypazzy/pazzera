@@ -178,6 +178,13 @@ export class CircleRealProvider implements CircleProvider {
     // be decimal strings (handled in `request()`).
     const idempotencyKey = randomUUID();
     const entitySecretCiphertext = await this.freshEntityCiphertext();
+    const dataString = JSON.stringify(input.typedData, (_k, v) =>
+      typeof v === 'bigint' ? v.toString() : v,
+    );
+    if (process.env.DEBUG_SIGN_TYPED_DATA) {
+      // eslint-disable-next-line no-console
+      console.log('[signTypedData] data string sent to Circle:\n' + dataString);
+    }
     const r = await this.request<{ data?: { signature?: string; v?: string | number; r?: string; s?: string } }>({
       method: 'POST',
       url: `${this.baseUrl}/v1/w3s/developer/sign/typedData`,
@@ -185,11 +192,7 @@ export class CircleRealProvider implements CircleProvider {
         idempotencyKey,
         entitySecretCiphertext,
         walletId: input.walletId,
-        // Circle expects `data` to be the JSON-stringified typedData,
-        // with BigInts as decimal strings.
-        data: JSON.stringify(input.typedData, (_k, v) =>
-          typeof v === 'bigint' ? v.toString() : v,
-        ),
+        data: dataString,
       },
       idempotencyKey,
     });
@@ -243,7 +246,10 @@ export class CircleRealProvider implements CircleProvider {
       amount: input.authorization.value,
       payTo: input.authorization.to,
       maxTimeoutSeconds: 60,
-      extra: { name: 'USDC', version: '2' },
+      // Circle's Nanopayments Gateway routes via extra.name='GatewayWalletBatched'
+      // (Meridian facilitator's isBatchPayment() check). Without this, Gateway
+      // falls back to plain x402 and rejects the signature shape.
+      extra: { name: 'GatewayWalletBatched', version: '1' },
     };
     const signature =
       '0x' +
