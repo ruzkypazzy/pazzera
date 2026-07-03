@@ -135,7 +135,7 @@ export async function validateSession(
  * Next route handler is expected to pass `cookieHeader`. Returns the raw
  * token (un-hashed) so callers can feed it into validateSession.
  */
-export function readSessionFromCookies(cookieHeader: string | null | undefined, cookieName = 'pazzera_sess'): string | null {
+export function readSessionFromCookies(cookieHeader: string | null | undefined, cookieName = 'sid'): string | null {
   if (!cookieHeader) return null;
   for (const piece of cookieHeader.split(';')) {
     const [k, ...rest] = piece.trim().split('=');
