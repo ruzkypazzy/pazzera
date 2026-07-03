@@ -1,9 +1,11 @@
 /**
  * Server runtime — boot-time orchestration.
  *
- * Validates env, starts Socket.IO and BullMQ workers alongside Next.js
- * when running with `node` (custom server). In Next.js standalone mode,
- * the socket/workers run as separate PM2 processes via the worker scripts.
+ * Validates env, starts Socket.IO alongside Next.js when running with
+ * `node` (custom server). In Next.js standalone mode (production), the
+ * socket runs as a separate PM2 process (see
+ * packages/realtime/src/standalone.ts) and the workers run as a
+ * separate PM2 process (see packages/agents/src/workers/run.ts).
  */
 import { logger, getEnv } from '@pazzera/core';
 
@@ -20,6 +22,6 @@ export async function ensureBooted() {
 export async function startSocketServer() {
   await ensureBooted();
   const env = getEnv();
-  const { startSocketServer: start } = await import('@pazzera/realtime');
-  await start(env.SOCKET_PORT);
+  const { startRealtimeServer: start } = await import('@pazzera/realtime');
+  await start(Number(env.SOCKET_PORT));
 }

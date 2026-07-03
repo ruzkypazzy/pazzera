@@ -1,4 +1,6 @@
-# Pazzera web image — Next.js production build
+# Pazzera web image — Next.js production build + custom server with
+# Socket.IO attached to the same HTTP port (no separate socket server
+# needed; nginx proxies /socket.io/ over the same origin).
 FROM node:20-bookworm-slim AS base
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libc6 tini openssl ca-certificates \
@@ -31,14 +33,23 @@ RUN corepack enable && corepack prepare pnpm@9.15.9 --activate && pnpm --filter 
 FROM base AS runner
 ENV NODE_ENV=production
 ENV PORT=3000
-ENV SOCKET_PORT=3001
-RUN groupadd -g 1001 nodejs && useradd -u 1001 -g nodejs -m -s /bin/bash pazzera
+ENV SOCKET_PORT=3000
+# pnpm must be on PATH in the runner so tsx + workspace deps resolve.
+RUN corepack enable && corepack prepare pnpm@9.15.9 --activate && \
+    groupadd -g 1001 nodejs && useradd -u 1001 -g nodejs -m -s /bin/bash pazzera
 COPY --from=builder /app/apps/web/.next/standalone ./
 COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
 COPY --from=builder /app/apps/web/public ./apps/web/public
 COPY --from=builder /app/packages ./packages
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/apps/web/server.ts ./apps/web/server.ts
+COPY --from=builder /app/apps/web/package.json ./apps/web/package.json
 USER pazzera
 RUN mkdir -p /tmp/pazzera-uploads && chmod 777 /tmp/pazzera-uploads
-EXPOSE 3000 3001
+EXPOSE 3000
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["node", "apps/web/server.js"]
+# Custom server boots Next.js HTTP server and attaches Socket.IO to
+# the same listener. Browser reaches it via same-origin
+# pazzera.com/socket.io/. SOCKET_PORT env unused (port shared with
+# Next.js on 3000).
+CMD ["pnpm", "exec", "tsx", "apps/web/server.ts"]

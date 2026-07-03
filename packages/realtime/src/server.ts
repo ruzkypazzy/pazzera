@@ -88,10 +88,23 @@ async function callFacilitator(_opts: {
   return { ok: false, reason: 'chain_error', latencyMs: 0 };
 }
 
-export async function startRealtimeServer(port = Number(process.env.PORT ?? 3001)) {
+export async function startRealtimeServer(
+  // If passed an http.Server, Socket.IO attaches to it (shares the
+  // port with Next.js). Otherwise it creates its own server bound
+  // to `port`. The `port` arg is ignored when an httpServer is
+  // provided.
+  httpOrPort?: number | import('node:http').Server,
+  portOrUndefined?: number,
+) {
   if (io) return io;
 
-  const httpServer = createServer();
+  let httpServer: import('node:http').Server;
+  if (typeof httpOrPort === 'object' && httpOrPort !== null) {
+    httpServer = httpOrPort;
+  } else {
+    httpServer = createServer();
+  }
+
   io = new Server<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>(httpServer, {
     cors: {
       origin: process.env.CORS_ALLOWLIST?.split(',') ?? ['http://localhost:3000', 'http://localhost:3001'],
@@ -365,13 +378,23 @@ export async function startRealtimeServer(port = Number(process.env.PORT ?? 3001
     socket.on('error', (err) => logger.error({ err }, 'realtime:socket_error'));
   });
 
-  httpServer.listen(port, async () => {
-    logger.info({ port }, 'realtime:listening');
+  // Only bind a port if we created the http server ourselves.
+  // When an external server was passed in, it's owned by the caller
+  // (e.g. Next.js custom server) — they handle listen() themselves.
+  if (typeof httpOrPort !== 'object') {
+    httpServer.listen(port ?? Number(process.env.PORT ?? 3001), async () => {
+      logger.info({ port: port ?? Number(process.env.PORT ?? 3001) }, 'realtime:listening');
+      if (process.env.DEMO_MODE === 'true') {
+        const { startDemoLoop } = await import('./demo-simulator');
+        startDemoLoop();
+      }
+    });
+  } else {
     if (process.env.DEMO_MODE === 'true') {
       const { startDemoLoop } = await import('./demo-simulator');
       startDemoLoop();
     }
-  });
+  }
 
   return io;
 }
