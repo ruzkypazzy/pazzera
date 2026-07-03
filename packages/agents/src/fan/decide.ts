@@ -46,6 +46,11 @@ export interface FanInput {
   listenDurationSec: number;
   mutedDurationSec: number;
   hiddenDurationSec: number;
+  /** Wall-clock elapsed since the stream began, in ms. Defaults to
+   * listenDurationSec * 1000 when not provided so the gate degrades
+   * to the old listen-duration behaviour for callers that haven't
+   * started passing effectiveDurationMs yet. */
+  effectiveDurationMs?: number;
   seekCount: number;
   loopCount: number;
   maxPlaybackRate: number;
@@ -187,25 +192,32 @@ export function decideFan(input: FanInput): FanDecision {
   } else if (fraud >= FRAUD_PARTIAL) {
     classification = 'partial_stream';
     // can still charge if they actually listened beyond 1.5× threshold
-    shouldCharge = input.listenDurationSec >= thresholdSec * 1.5;
+    shouldCharge = input.effectiveDurationMs / 1000 >= thresholdSec * 1.5;
     if (!shouldCharge) {
-      reasons.push('Listen duration short of lenient charge threshold');
+      reasons.push('Wall-clock short of lenient charge threshold');
     }
   } else {
     // Clean stream — classification depends on whether they crossed threshold
-    if (input.listenDurationSec >= thresholdSec) {
+    // Use WALL-CLOCK elapsed (effectiveDurationMs) for the charge gate,
+    // not listenDurationSec. listenDurationSec subtracts hidden/muted
+    // time, which penalizes legitimate listeners who briefly switched
+    // tabs or had the screen dim. The fraud signals (fraudScore)
+    // still consider hiddenRatio for the fraud escalation path
+    // above, so bad actors remain blocked.
+    const wallClockSec = (input.effectiveDurationMs ?? input.listenDurationSec * 1000) / 1000;
+    if (wallClockSec >= thresholdSec) {
       classification = 'valid_stream';
       shouldCharge = true;
       paymentTriggerSec = thresholdSec;
-    } else if (input.listenDurationSec >= thresholdSec * 0.5) {
+    } else if (wallClockSec >= thresholdSec * 0.5) {
       classification = 'partial_stream';
       // Don't charge if below full threshold
       shouldCharge = false;
-      reasons.push('Listened half-threshold but not full — not enough for a charge');
+      reasons.push('Wall-clock under full threshold — not enough for a charge');
     } else {
       classification = 'partial_stream';
       shouldCharge = false;
-      reasons.push('Listen below half-threshold — preview only');
+      reasons.push('Wall-clock below half-threshold — preview only');
     }
   }
 
