@@ -204,8 +204,12 @@ export async function runSignAndSettle(opts: {
   // 3. Build the x402 envelope. Use bytes32 nonce (EIP-712 expects
   // bytes32; the realtime nonce is a friendly opaque string we keep
   // for the audit log; the bytes32 version is derived from it).
-  const validAfter = Math.floor(Date.now() / 1000) - 30;
-  const validBefore = Math.floor(Date.now() / 1000) + 600;
+  //
+  // IMPORTANT: x402 spec requires validAfter/validBefore to be a
+  // tight window (FacilitatorService rejects anything past
+  // now + 60s). Keep validBefore ≤ 60s in the future.
+  const validAfter = Math.floor(Date.now() / 1000) - 5;
+  const validBefore = Math.floor(Date.now() / 1000) + 50;
   const valueBaseUnits = usdcToBaseUnits(amountUsdc).toString();
   const eip712Nonce = newNonce();
 
