@@ -25,7 +25,6 @@
  */
 import { prisma } from '@pazzera/db';
 import { logger, getEnv, BlockchainError } from '@pazzera/core';
-import { appendFileSync } from 'node:fs';
 import { enqueue } from '@pazzera/queue';
 import { getActiveProvider } from '../circle/factory';
 import { verifyAuthorizationSignature, isShape } from '../x402/verify';
@@ -171,20 +170,6 @@ export class FacilitatorService {
           // the envelope window upstream and retry. 'insufficient_funds'
           // is not retryable. Everything else is retryable.
           const reason = result.errorReason ?? 'chain_error';
-          // Always-on audit: persist Circle's exact rejection reason so
-          // we can correlate it with the request envelope.
-          try {
-            appendFileSync('/tmp/pazzera-x402-rejects.log',
-              JSON.stringify({
-                ts: new Date().toISOString(),
-                paymentId: input.paymentId,
-                errorReason: result.errorReason,
-                network: result.network,
-                payer: result.payer,
-                receiver: result.receiver,
-              }) + '\n',
-            );
-          } catch { /* ignore */ }
           const mapped: SettleFailureReason =
             reason === 'insufficient_funds' ? 'insufficient_balance' :
             reason === 'authorization_validity_too_short' ? 'expired' :

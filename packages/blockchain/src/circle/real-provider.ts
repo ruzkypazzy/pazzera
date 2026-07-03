@@ -14,7 +14,6 @@
  */
 import { type Address, type Hex } from 'viem';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { appendFileSync } from 'node:fs';
 import { getEnv, logger } from '@pazzera/core';
 import {
   CircleError,
@@ -286,21 +285,6 @@ export class CircleRealProvider implements CircleProvider {
       payload,
       extensions: {},
     };
-    // Persist every settle attempt to a JSONL log so we can compare
-    // successful vs failing envelopes side-by-side. Always-on (cheap).
-    try {
-      appendFileSync(
-        '/tmp/pazzera-x402-settle.log',
-        JSON.stringify({
-          ts: new Date().toISOString(),
-          paymentRequirements,
-          paymentPayload: {
-            ...paymentPayload,
-            payload: { ...paymentPayload.payload, signature: paymentPayload.payload.signature.slice(0, 18) + '...' },
-          },
-        }) + '\n',
-      );
-    } catch { /* ignore */ }
     const r = await this.request<CircleX402SettleResult>({
       method: 'POST',
       url: `${this.gatewayUrl}/v1/x402/settle`,
