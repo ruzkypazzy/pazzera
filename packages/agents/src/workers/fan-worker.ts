@@ -375,9 +375,10 @@ export async function runSignAndSettle(opts: {
   const eip712Nonce = newNonce();
 
   // 4. Create the Payment row up front so FacilitatorService has a
-  // stable id to mark settled. The unique-by-streamId constraint
-  // means a second fan-worker run for the same stream would conflict
-  // — that's intentional (idempotency).
+  // stable id to mark settled. If a Payment row already exists for
+  // this stream (from a previous fan-worker run or stream-end handler),
+  // adopt it instead of failing — otherwise a transient retry would
+  // leave the listener permanently unpaid.
   let payment;
   try {
     payment = await prisma.payment.create({
@@ -390,10 +391,35 @@ export async function runSignAndSettle(opts: {
         status: 'pending',
       },
     });
-  } catch (err) {
-    logger.warn({ err, streamId }, 'fan:sign_and_settle:payment_create_failed');
-    await emitPaymentFailed(streamId, 'chain_error', 'Could not persist payment');
-    return;
+  } catch (err: any) {
+    // P2002 = Prisma unique-constraint violation. Look up the
+    // existing Payment row for this stream and reuse it.
+    if (err?.code === 'P2002') {
+      const existing = await prisma.payment.findUnique({ where: { streamId } });
+      if (existing) {
+        payment = existing;
+        logger.info(
+          { streamId, paymentId: existing.id, status: existing.status },
+          'fan:sign_and_settle:reusing_existing_payment',
+        );
+        // If the previous attempt already settled this, nothing to do.
+        if (existing.status === 'distributed' || existing.status === 'completed') {
+          logger.info(
+            { streamId, paymentId: existing.id },
+            'fan:sign_and_settle:already_settled',
+          );
+          return;
+        }
+      } else {
+        logger.error({ err, streamId }, 'fan:sign_and_settle:payment_create_failed_no_existing');
+        await emitPaymentFailed(streamId, 'chain_error', 'Could not persist payment');
+        return;
+      }
+    } else {
+      logger.warn({ err, streamId }, 'fan:sign_and_settle:payment_create_failed');
+      await emitPaymentFailed(streamId, 'chain_error', 'Could not persist payment');
+      return;
+    }
   }
 
   await prisma.paymentEvent.create({
