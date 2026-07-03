@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Search, Bell, ChevronDown, User, Settings, LogOut, LayoutDashboard, Upload, Wallet as WalletIcon, Music } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { PazzeraLogo } from '@/components/logo';
+import { useSessionStore } from './SessionBootstrap';
 
 type Props = {
   isArtist?: boolean;
@@ -19,38 +20,12 @@ export function TopHeader({ isArtist = false, isAdmin = false, walletBalance = '
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
-  // Source of truth: fetch live session + wallet on mount so the avatar
-  // dropdown always shows the real role + balance — regardless of
-  // whether the page wrapped in <AppShell walletBalance="...">.
-  // Props are still respected when set (some pages already pass them).
-  const [liveBalance, setLiveBalance] = useState<string | null>(null);
-  const [liveIsArtist, setLiveIsArtist] = useState<boolean | null>(null);
-  const [liveRole, setLiveRole] = useState<string | null>(null);
-  const [liveDisplayName, setLiveDisplayName] = useState<string | null>(null);
-  const [liveUsername, setLiveUsername] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    void fetch('/api/auth/session', { credentials: 'include' })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d: any) => {
-        if (cancelled || !d?.authenticated) return;
-        if (typeof d.wallet?.balanceUsdc !== 'undefined' && d.wallet?.balanceUsdc !== null) {
-          setLiveBalance(Number(d.wallet.balanceUsdc).toFixed(2));
-        }
-        if (d.user?.isArtist === true || d.user?.role === 'artist' || d.user?.role === 'admin') {
-          setLiveIsArtist(true);
-        } else {
-          setLiveIsArtist(false);
-        }
-        setLiveRole(d.user?.role ?? null);
-        setLiveDisplayName(d.user?.displayName ?? null);
-        setLiveUsername(d.user?.username ?? null);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [setLiveBalance, setLiveIsArtist, setLiveRole, setLiveDisplayName, setLiveUsername]);
+  // Live session data fetched by SessionBootstrap on mount.
+  const liveBalance = useSessionStore((s) => s.walletBalance);
+  const liveIsArtist = useSessionStore((s) => s.isArtist);
+  const liveRole = useSessionStore((s) => s.role);
+  const liveDisplayName = useSessionStore((s) => s.displayName);
+  const liveUsername = useSessionStore((s) => s.username);
 
   const effectiveIsArtist = liveIsArtist ?? isArtist;
   const effectiveIsAdmin = isAdmin || liveRole === 'admin';

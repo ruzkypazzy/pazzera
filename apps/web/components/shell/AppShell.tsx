@@ -3,6 +3,7 @@
 import React from 'react';
 import { TopHeader } from './TopHeader';
 import { BottomNav } from './BottomNav';
+import { SessionBootstrap } from './SessionBootstrap';
 
 type Props = {
   children: React.ReactNode;
@@ -19,6 +20,7 @@ export function AppShell({
 }: Props) {
   return (
     <div className="min-h-screen" style={{ background: '#0A0A0A' }}>
+      <SessionBootstrap />
       <TopHeader isArtist={isArtist} isAdmin={isAdmin} walletBalance={walletBalance} />
       <main
         className="pt-[72px]"
