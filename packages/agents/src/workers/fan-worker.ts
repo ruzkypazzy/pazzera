@@ -299,7 +299,7 @@ export async function runSignAndSettle(opts: {
       v: signed.v,
       r: signed.r,
       s: signed.s,
-      asset: env.USDC_CONTRACT_ADDRESS as `0x${string}`,
+      asset: ('0x0077777d7EBA4688BDeF3E311b846F25870A19B9') as `0x${string}`,  // Gateway Wallet for batched scheme
     },
     nonce,
   });
