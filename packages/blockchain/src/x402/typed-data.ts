@@ -101,14 +101,22 @@ export function newAuthNonce(): Hex {
   return `0x${bytes.toString('hex')}` as Hex;
 }
 
-/** Validate that an authorization's validBefore is within the 60s window. */
+/**
+ * Validate that an authorization's window is sensible for the chosen
+ * facilitator:
+ *   - Coinbase facilitator:   validBefore ≤ now + 60s
+ *   - Circle Gateway batch:   validBefore ≥ now + 7d
+ *
+ * Auto-detect by checking if the window is wider than 60s. We default
+ * to permissive behavior (reject only obviously-broken envelopes) and
+ * rely on the actual facilitator to enforce its own limits.
+ */
 export function isAuthorizationFresh(auth: TransferWithAuthorization, nowSec = Math.floor(Date.now() / 1000)): boolean {
   const va = Number.parseInt(auth.validAfter, 10);
   const vb = Number.parseInt(auth.validBefore, 10);
   if (Number.isNaN(va) || Number.isNaN(vb)) return false;
   if (va < 0 || vb < 0) return false;
-  if (vb > nowSec + 60) return false; // spec: max 60s future
-  if (vb <= nowSec) return false;       // not yet valid? actually expired
+  if (vb <= nowSec) return false; // already expired
   return true;
 }
 

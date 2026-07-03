@@ -164,18 +164,32 @@ export class FacilitatorService {
           },
           network,
         });
-        if (result.status === 'failed') {
-          await this.recordFailure(input.paymentId, 'chain_error', true);
-          return { ok: false, reason: 'chain_error', retryable: true, latencyMs: Date.now() - started };
+        if (result.success === false) {
+          // Map the most common error reasons onto our failure kinds.
+          // 'authorization_validity_too_short' is not retryable — fix
+          // the envelope window upstream and retry. 'insufficient_funds'
+          // is not retryable. Everything else is retryable.
+          const reason = result.errorReason ?? 'chain_error';
+          const mapped: SettleFailureReason =
+            reason === 'insufficient_funds' ? 'insufficient_balance' :
+            reason === 'authorization_validity_too_short' ? 'expired' :
+            reason === 'invalid_signature' ? 'invalid_signature' :
+            'chain_error';
+          const retryable = mapped === 'chain_error';
+          await this.recordFailure(input.paymentId, mapped, retryable);
+          return { ok: false, reason: mapped, retryable, latencyMs: Date.now() - started };
         }
         // 6. Persist settlement — update Payment row in DB
         await prisma.payment.update({
           where: { id: input.paymentId },
           data: {
             status: 'settled',
-            txHash: result.txHash ?? null,
-            facilitatorTransferId: result.transferId,
-            settledAt: result.confirmedAt ?? new Date(),
+            txHash: result.transaction || null,
+            // Gateway uses the batch transaction id as the settlement
+            // identifier until the chain tx hash lands. We use the
+            // payer address as a stable cross-reference id until then.
+            facilitatorTransferId: result.transaction || result.payer,
+            settledAt: new Date(),
           },
         });
 
@@ -189,8 +203,9 @@ export class FacilitatorService {
             amountUsdc: existing.amountUsdc,
             severity: 0,
             meta: {
-              txHash: result.txHash,
-              blockNumber: result.blockNumber,
+              txHash: result.transaction,
+              network: result.network,
+              payer: result.payer,
               chainId: env.ARC_CHAIN_ID,
               latencyMs: Date.now() - started,
               nonce: input.nonce,
@@ -203,11 +218,10 @@ export class FacilitatorService {
 
         return {
           ok: true,
-          facilitatorTransferId: result.transferId,
-          txHash: result.txHash,
-          blockNumber: result.blockNumber,
+          facilitatorTransferId: result.transaction || result.payer,
+          txHash: result.transaction || undefined,
           chainId: env.ARC_CHAIN_ID,
-          settledAt: result.confirmedAt ?? new Date(),
+          settledAt: new Date(),
           latencyMs: Date.now() - started,
           amountUsdc: existing.amountUsdc,
         };

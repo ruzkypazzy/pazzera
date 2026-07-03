@@ -205,14 +205,13 @@ export class CircleMockProvider implements CircleProvider {
         throw new CircleError(`signature invalid: ${verified.reason}`, 422, 'INVALID_SIGNATURE', false);
       }
       await new Promise((r) => setTimeout(r, this.settleLatencyMs));
-      const transferId = `mock-x402-${randomBytes(12).toString('hex')}`;
       const txHash = `0x${randomBytes(32).toString('hex')}`;
       return {
-        transferId,
-        status: 'confirmed',
-        txHash,
-        blockNumber: this.fakeBlock(),
-        confirmedAt: new Date(),
+        success: true,
+        transaction: txHash,
+        network: input.network,
+        payer: input.authorization.from,
+        receiver: input.authorization.to,
       };
     });
   }

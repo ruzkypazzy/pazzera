@@ -12,7 +12,10 @@ export const PLAYBACK_TICK_INTERVAL_MS = 5_000;
 export const MIN_TICK_INTERVAL_MS = 2_000;
 export const MAX_BUFFERED_TICKS = 60; // 5 minutes worth at 5s
 export const MAX_INVALID_PAYLOADS = 5;
-export const PAYMENT_NONCE_TTL_SEC = 600;
+// Gateway requires validBefore to be at least 7 days in the future;
+// align the nonce TTL with that envelope so consumeNonce keeps the
+// row valid long enough for batched Gateway settlement.
+export const PAYMENT_NONCE_TTL_SEC = 7 * 24 * 3600 + 3600; // 7d + 1h buffer
 export const PAYMENT_THRESHOLD_PCT = 25;
 export const SUSPICIOUS_SCORE_AUTO_ENQUEUE = 50;
 

@@ -98,13 +98,18 @@ export interface CircleX402SettleInput {
 }
 
 export interface CircleX402SettleResult {
-  /** Circle's internal transfer ID — used for status polling. */
-  transferId: string;
-  status: 'pending' | 'submitted' | 'confirmed' | 'failed';
-  txHash?: string;
-  blockNumber?: number;
-  confirmedAt?: Date;
-  failureReason?: string;
+  /** True when Gateway accepted the payment (queued for batch settle). */
+  success: boolean;
+  /** Circle's batched transaction hash. Empty until the batch settles. */
+  transaction: string;
+  /** Network id echoed back. */
+  network: string;
+  /** Payer (listener) address. */
+  payer: string;
+  /** On failure: machine-readable reason (e.g. 'authorization_validity_too_short'). */
+  errorReason?: string;
+  /** Some error payloads include a recipient address. */
+  receiver?: string;
 }
 
 export interface CircleProvider {

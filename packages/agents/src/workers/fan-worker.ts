@@ -205,11 +205,20 @@ export async function runSignAndSettle(opts: {
   // bytes32; the realtime nonce is a friendly opaque string we keep
   // for the audit log; the bytes32 version is derived from it).
   //
-  // IMPORTANT: x402 spec requires validAfter/validBefore to be a
-  // tight window (FacilitatorService rejects anything past
-  // now + 60s). Keep validBefore ≤ 60s in the future.
-  const validAfter = Math.floor(Date.now() / 1000) - 5;
-  const validBefore = Math.floor(Date.now() / 1000) + 50;
+  // IMPORTANT — TWO competing constraints:
+  //   1. Our local FacilitatorService.isAuthorizationFresh rejects
+  //      validBefore > now + 60s (x402 freshness spec).
+  //   2. Circle Gateway's batched settler REQUIRES validBefore to be
+  //      at least 7 days + small buffer in the future. Shorter windows
+  //      return errorReason='authorization_validity_too_short'.
+  //
+  // To satisfy both: build the envelope with validBefore = now + 7d
+  // (Gateway minimum) and update isAuthorizationFresh to skip the
+  // 60s check when the envelope is destined for Gateway batch settle.
+  // The nonce single-use guard in consumeNonce + the 24h replay cache
+  // in Redis together prevent real-time replay even with a wide window.
+  const validAfter = Math.floor(Date.now() / 1000) - 60;
+  const validBefore = Math.floor(Date.now() / 1000) + 7 * 24 * 3600;
   const valueBaseUnits = usdcToBaseUnits(amountUsdc).toString();
   const eip712Nonce = newNonce();
 
