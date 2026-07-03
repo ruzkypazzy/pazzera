@@ -263,6 +263,11 @@ export class CircleRealProvider implements CircleProvider {
     };
     const paymentPayload = {
       x402Version: 2,
+      resource: {
+        url: 'pazzera://listen/' + (input.authorization.from ?? 'unknown'),
+        description: 'Pazzera per-listen payment',
+        mimeType: 'application/json',
+      },
       accepted: paymentRequirements,
       payload,
       extensions: {},
