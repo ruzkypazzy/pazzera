@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Repeat, Shuffle, Heart, Sparkles, Zap } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useCurrentTrack, type CurrentTrack } from '@/lib/current-track';
@@ -50,6 +51,12 @@ export function PlayerBar({
   onSkipPrev,
   paymentTriggered,
 }: Props) {
+  // Sticky audio player is homepage-only by product spec. On any other
+  // authed route (wallet, settings, dashboard, song, etc.) the bar must
+  // not render — it covered transaction lists on /wallet.
+  const pathname = usePathname();
+  if (pathname !== '/home') return null;
+
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [progress, setProgress] = useState(0); // 0..1
   const [elapsedSecState, setElapsedSecState] = useState(0); // seconds, updated by polling
