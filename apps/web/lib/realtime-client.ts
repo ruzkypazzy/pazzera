@@ -174,14 +174,28 @@ export async function startRealtime(opts: {
   playbackState: () => PlaybackState;
   isResume?: boolean;
 }): Promise<string> {
-  if (socket && socket.connected) return sessionToken ?? '';
-  if (socket) return sessionToken ?? '';
+  // Same song on a live socket → resume; nothing to (re)start.
+  if (socket && songId === opts.songId) return sessionToken ?? '';
 
-  try {
-    socket = await openSocket();
-  } catch {
-    scheduleReconnect();
-    // Continue optimistically — UI shows the reconnecting state.
+  // Different song on a live socket → close out the previous stream
+  // so its end-of-stream Fan Agent run fires, then start a new one.
+  if (socket && socket.connected && songId && songId !== opts.songId) {
+    socket.emit('playback:end', {
+      sessionId: sessionToken ?? '',
+      songId,
+      reason: 'skipped',
+      finalPositionSec: opts.playbackState().positionSec,
+      timestamp: Date.now(),
+    });
+  }
+
+  if (!socket || !socket.connected) {
+    try {
+      socket = await openSocket();
+    } catch {
+      scheduleReconnect();
+      // Continue optimistically — UI shows the reconnecting state.
+    }
   }
   sessionToken = opts.isResume && sessionToken
     ? sessionToken

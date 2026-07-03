@@ -248,12 +248,16 @@ export async function startRealtimeServer(
         socket.data.lastTickAt = now;
 
         const payload = TickSchema.parse(raw);
-        const state = await ingestTick(payload, now);
+        // Resolve the stream by the server-issued id stored on the
+        // socket at playback:start — the client's sessionId is its own
+        // token and matches neither streamId nor sessionToken.
+        const state = await ingestTick(payload, now, socket.data.streamId);
         ack?.({ streamId: state.streamId, timestamp: now, accumulatedMs: state.effectiveMs, thresholdCrossed: state.thresholdCrossed });
         socket.emit('ack_tick', { streamId: state.streamId, timestamp: now, accumulatedMs: state.effectiveMs, thresholdCrossed: state.thresholdCrossed });
 
         // Emit threshold_crossed one-shot
-        if (state.thresholdCrossed && !socket.data.streamId) {
+        if (state.thresholdCrossed && !socket.data.thresholdEmitted) {
+          socket.data.thresholdEmitted = true;
           socket.emit('threshold_crossed', {
             streamId: state.streamId,
             songId: state.songId,
@@ -281,7 +285,7 @@ export async function startRealtimeServer(
     socket.on('playback:seek', async (raw) => {
       try {
         const payload = StreamSeekSchema.parse(raw);
-        await recordSeek({ sessionId: payload.sessionId, songId: payload.songId, fromSec: payload.fromSec, toSec: payload.toSec, monotonicMs: Date.now() });
+        await recordSeek({ sessionId: payload.sessionId, songId: payload.songId, fromSec: payload.fromSec, toSec: payload.toSec, monotonicMs: Date.now(), resolvedStreamId: socket.data.streamId });
       } catch {
         socket.data.invalidPayloads = (socket.data.invalidPayloads ?? 0) + 1;
       }
@@ -297,6 +301,7 @@ export async function startRealtimeServer(
           reason: payload.reason,
           finalPositionSec: payload.finalPositionSec,
           monotonicMs: Date.now(),
+          resolvedStreamId: socket.data.streamId,
         });
         if (state) {
           socket.leave(`stream:${state.streamId}`);
@@ -320,7 +325,7 @@ export async function startRealtimeServer(
       for (const t of buf) {
         try {
           const parsed = TickSchema.parse(t);
-          await ingestTick(parsed, parsed.timestamp);
+          await ingestTick(parsed, parsed.timestamp, socket.data.streamId);
           accepted += 1;
         } catch {
           rejected += 1;

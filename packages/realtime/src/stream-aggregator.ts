@@ -208,14 +208,35 @@ export function getState(streamId: string): StreamState | undefined {
   return STATES.get(streamId);
 }
 
+/** Fallback lookup for callers that identify a stream by its server-issued sessionToken. */
+function findBySessionToken(sessionToken: string): StreamState | undefined {
+  for (const state of STATES.values()) {
+    if (state.sessionToken === sessionToken) return state;
+  }
+  return undefined;
+}
+
 /**
  * Process a tick. The server is authoritative: it computes the time delta
  * between this tick and the last one, then attributes those ms based on the
  * flags the client sent. (We don't trust the client's "currentTime" deltas —
  * only the wall-clock timestamp + position sanity checks.)
  */
-export async function ingestTick(payload: PlaybackTickPayload, monotonicMs: number): Promise<StreamState> {
-  const state = STATES.get(payload.sessionId); // sessionId is actually the sessionToken here
+export async function ingestTick(
+  payload: PlaybackTickPayload,
+  monotonicMs: number,
+  // Server-authoritative stream id, from socket.data.streamId (set at
+  // playback:start). The client's sessionId is self-generated and does
+  // NOT match our streamId or sessionToken, so trusting it broke every
+  // real listener's tick: STATES.get() missed, the tick threw, and the
+  // socket was eventually disconnected for invalid payloads — which
+  // meant the 25% threshold never crossed and no payment ever ran.
+  resolvedStreamId?: string,
+): Promise<StreamState> {
+  const state =
+    (resolvedStreamId ? STATES.get(resolvedStreamId) : undefined) ??
+    STATES.get(payload.sessionId) ??
+    findBySessionToken(payload.sessionId);
   if (!state) {
     throw new Error('Stream not found in memory (lost connection?)');
   }
@@ -309,9 +330,15 @@ export async function recordSeek(opts: {
   fromSec: number;
   toSec: number;
   monotonicMs: number;
+  /** Server-authoritative stream id from socket.data.streamId. */
+  resolvedStreamId?: string;
 }): Promise<void> {
   for (const state of STATES.values()) {
-    if (state.sessionToken === opts.sessionId) {
+    if (
+      state.streamId === opts.resolvedStreamId ||
+      state.sessionToken === opts.sessionId ||
+      state.streamId === opts.sessionId
+    ) {
       const delta = opts.toSec - opts.fromSec;
       if (delta > 30) state.largeSeeksForward += 1;
       state.seekCount += 1;
@@ -334,9 +361,13 @@ export async function recordSeek(opts: {
   }
 }
 
-export async function recordLoop(opts: { sessionId: string; positionSec: number; monotonicMs: number }): Promise<void> {
+export async function recordLoop(opts: { sessionId: string; positionSec: number; monotonicMs: number; resolvedStreamId?: string }): Promise<void> {
   for (const state of STATES.values()) {
-    if (state.sessionToken === opts.sessionId) {
+    if (
+      state.streamId === opts.resolvedStreamId ||
+      state.sessionToken === opts.sessionId ||
+      state.streamId === opts.sessionId
+    ) {
       state.loopCount += 1;
       await prisma.playbackTick.create({
         data: {
@@ -357,9 +388,15 @@ export async function endStream(opts: {
   reason: string;
   finalPositionSec: number;
   monotonicMs: number;
+  /** Server-authoritative stream id from socket.data.streamId. */
+  resolvedStreamId?: string;
 }): Promise<StreamState | null> {
   for (const [id, state] of STATES.entries()) {
-    if (state.sessionToken === opts.sessionId) {
+    if (
+      id === opts.resolvedStreamId ||
+      state.sessionToken === opts.sessionId ||
+      id === opts.sessionId
+    ) {
       state.ended = true;
       state.lastPositionSec = opts.finalPositionSec;
       await prisma.stream.update({
