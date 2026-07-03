@@ -503,6 +503,15 @@ export { consumeNonce, issueAndStoreNonce };
 
 export { snapshotAdminCounters };
 
-if (require.main === module) {
-  void startRealtimeServer();
+// Standalone bootstrap: when this module is run directly (e.g. via
+// `tsx packages/realtime/src/standalone.ts`), start the realtime
+// server on its own. When imported by another caller (e.g. the
+// Next.js custom server), this stays a no-op.
+import { fileURLToPath } from 'node:url';
+if (
+  process.argv[1] &&
+  fileURLToPath(import.meta.url) === process.argv[1]
+) {
+  const port = Number(process.env.PORT ?? 3001);
+  void startRealtimeServer(port);
 }
