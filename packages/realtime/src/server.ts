@@ -13,7 +13,7 @@
  */
 import { Server } from 'socket.io';
 import { createServer } from 'node:http';
-import { logger } from '@pazzera/core';
+import { logger, getEnv, validateSession, readSessionFromCookies } from '@pazzera/core';
 import { prisma } from '@pazzera/db';
 import { enqueue } from '@pazzera/queue';
 import {
@@ -125,28 +125,55 @@ export async function startRealtimeServer(
   });
 
   // ─── Auth middleware ─────────────────────────────────────────
+  // The browser sends the same session cookie that the HTTP layer
+  // uses (name from SESSION_COOKIE_NAME, default 'sid'). We delegate
+  // to validateSession so the hashing, expiry, and revocation checks
+  // stay in one place. Fall back to the auth.userId / isAdmin paths
+  // for the legacy dev/demo socket clients.
   io.use(async (socket, next) => {
     try {
       const auth = socket.handshake.auth as { userId?: string; sessionToken?: string; isAdmin?: boolean };
-      const cookieToken = socket.handshake.headers.cookie?.split(';').find((c) => c.trim().startsWith('csrf='))?.split('=')[1];
-      // In Phase 11 we'll wire proper JWT verification; for now we accept a
-      // sessionToken from the cookie or auth payload.
-      const token = auth.sessionToken ?? cookieToken ?? socket.handshake.query?.ticket;
-      if (!token && !auth.isAdmin) {
+      const env = getEnv();
+      const cookieName = env.SESSION_COOKIE_NAME;
+      const cookieHeader = socket.handshake.headers.cookie;
+      let resolvedUserId: string | null = null;
+      let resolvedIsAdmin = false;
+
+      if (cookieHeader) {
+        const rawToken = readSessionFromCookies(cookieHeader, cookieName);
+        if (rawToken) {
+          const session = await validateSession(rawToken, { touch: true });
+          if (session) {
+            resolvedUserId = session.userId;
+          }
+        }
+      }
+
+      if (!resolvedUserId && !resolvedIsAdmin) {
+        if (auth.sessionToken) {
+          // Legacy: a sessionToken passed via auth payload. Hash
+          // and look it up the same way.
+          const session = await validateSession(String(auth.sessionToken), { touch: false });
+          if (session) {
+            resolvedUserId = session.userId;
+          }
+        } else if (auth.isAdmin) {
+          resolvedIsAdmin = true;
+        } else if (auth.userId) {
+          // Dev-only fallback. Production requires a valid session
+          // cookie.
+          if (env.NODE_ENV !== 'production') {
+            resolvedUserId = auth.userId;
+          }
+        }
+      }
+
+      if (!resolvedUserId && !resolvedIsAdmin) {
         return next(new Error('UNAUTHENTICATED'));
       }
-      // Pull the session
-      const session = await prisma.session.findUnique({ where: { sessionTokenHash: String(token ?? '') } });
-      if (session && !session.revokedAt && session.expiresAt > new Date()) {
-        socket.data.userId = session.userId;
-      } else if (auth.userId) {
-        // Demo / dev path: trust the auth.userId
-        socket.data.userId = auth.userId;
-      } else if (auth.isAdmin) {
-        socket.data.isAdmin = true;
-      } else {
-        return next(new Error('UNAUTHENTICATED'));
-      }
+
+      if (resolvedUserId) socket.data.userId = resolvedUserId;
+      if (resolvedIsAdmin) socket.data.isAdmin = true;
       socket.data.connectedAt = Date.now();
       next();
     } catch (err) {
@@ -155,7 +182,7 @@ export async function startRealtimeServer(
     }
   });
 
-  // ─── Connection handler ──────────────────────────────────────
+
   io.on('connection', (socket) => {
     const userId = socket.data.userId;
     const isAdmin = socket.data.isAdmin;

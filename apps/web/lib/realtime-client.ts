@@ -19,9 +19,14 @@ import { io, type Socket } from 'socket.io-client';
 import { retry } from './retry';
 
 const TICK_INTERVAL_MS = 5_000;
+// Socket.IO is hosted by the Next.js server on the same origin. Browsers
+// hit pazzera.com/socket.io/ which nginx proxies to the same listener
+// that serves the Next.js app. In dev, window.location.origin is also
+// the dev server. NEXT_PUBLIC_REALTIME_URL is kept as an optional
+// override (e.g. for tests pointing at a mock server).
 const SOCKET_URL =
   (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_REALTIME_URL) ||
-  'http://localhost:3001';
+  (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000');
 
 export type ConnectionStatus =
   | 'idle'
