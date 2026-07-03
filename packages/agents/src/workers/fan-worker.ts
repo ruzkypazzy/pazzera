@@ -103,6 +103,12 @@ async function loadStreamSignals(streamId: string): Promise<FanInput | null> {
     listenDurationSec: Math.round(listen),
     mutedDurationSec: Math.round(muted),
     hiddenDurationSec: Math.round(hidden),
+    // Wall-clock elapsed is read straight from the stream row — it's
+    // maintained server-side by the aggregator as `effectiveDurationMs`
+    // and includes all ticks (visible + hidden + muted). The Fan Agent
+    // uses this for the charge threshold so brief tab backgrounding
+    // doesn't penalize legitimate listeners.
+    effectiveDurationMs: stream.effectiveDurationMs ?? Math.round(listen + muted + hidden) * 1000,
     seekCount,
     loopCount,
     maxPlaybackRate: maxRate,
