@@ -147,9 +147,41 @@ export function readSessionFromCookies(cookieHeader: string | null | undefined, 
 /**
  * Convenience: read + validate the current session if one exists.
  * Returns `null` when there is no valid session.
+ *
+ * Accepts EITHER a NextRequest (preferred — the cookie header is
+ * extracted internally) OR an explicit cookieHeader string. The legacy
+ * `cookieHeader` opt is preserved for callers that only have the
+ * header string in scope. If neither is supplied, the cookie header
+ * is read from `next/headers` when available, falling back to a no-op
+ * (returns null) so this stays safe to call from contexts that have
+ * no request (background workers, etc.).
  */
-export async function getCurrentSession(opts: { cookieHeader?: string | null } = {}): Promise<ValidatedSession | null> {
-  const token = readSessionFromCookies(opts.cookieHeader ?? null);
+export async function getCurrentSession(
+  opts:
+    | { cookieHeader?: string | null }
+    | { req: { headers: { get(name: string): string | null } } }
+    = {},
+): Promise<ValidatedSession | null> {
+  let cookieHeader: string | null | undefined;
+  if ('req' in opts && opts.req) {
+    cookieHeader = opts.req.headers.get('cookie');
+  } else if ('cookieHeader' in opts) {
+    cookieHeader = opts.cookieHeader;
+  } else {
+    // Fall back to next/headers so callers in route handlers / server
+    // components don't have to pass the request through.
+    try {
+      const { cookies } = await import('next/headers');
+      const store = await cookies();
+      cookieHeader = store
+        .getAll()
+        .map((c) => `${c.name}=${c.value}`)
+        .join('; ');
+    } catch {
+      cookieHeader = null;
+    }
+  }
+  const token = readSessionFromCookies(cookieHeader ?? null);
   return validateSession(token, { touch: true });
 }
 
