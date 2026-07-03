@@ -22,8 +22,13 @@ import {
 } from '@pazzera/core';
 
 const Body = z.object({
-  amountUsdc: z.string().regex(/^\d+(\.\d+)?$/).refine((v) => parseFloat(v) > 0 && parseFloat(v) <= 10000, {
-    message: 'amountUsdc must be > 0 and ≤ 10000',
+  // Indie-artist withdrawals: any amount from 1 USDC upwards, no
+  // daily cap. Independent artists should be able to drain their
+  // full Gateway Balance in one shot when they want to off-ramp
+  // their earnings. The Circle Gateway balance check below still
+  // prevents over-withdraw.
+  amountUsdc: z.string().regex(/^\d+(\.\d+)?$/).refine((v) => parseFloat(v) >= 1, {
+    message: 'amountUsdc must be ≥ 1',
   }),
 });
 

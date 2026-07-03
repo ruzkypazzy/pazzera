@@ -8,9 +8,14 @@
  *   1. approve(GatewayWallet, amount) on USDC
  *   2. deposit(USDC, amount) on GatewayWallet
  *
- * Gateway Balance credits ~13 minutes after both txs mine.
- * The Fan Agent also auto-tops up before settling, so manual top-ups
- * are optional — this endpoint is for users who want to fund upfront.
+ * The deposit CANNOT succeed until the approve is COMPLETE on-chain
+ * (otherwise the Gateway contract sees allowance=0 and reverts). We poll
+ * the approve tx until state === 'COMPLETE' before submitting the
+ * deposit. Without this, on a slow block the deposit fails with
+ * "missing approval" and the user has to click Top up 2-3 times.
+ *
+ * After both txs, the Gateway Balance credits when the Circle batch
+ * settles (~13 minutes on testnet).
  */
 import { z } from 'zod';
 import {
@@ -57,7 +62,6 @@ export const POST = withApi(
     }
 
     const env = getEnv();
-    // Ensure CIRCLE_BASE_URL is set so CircleRealProvider reads it.
     if (!env.CIRCLE_BASE_URL) {
       process.env.CIRCLE_BASE_URL = 'https://api.circle.com';
     }
@@ -81,6 +85,29 @@ export const POST = withApi(
       'gateway_topup:approve_submitted',
     );
 
+    // Wait for approve to confirm on-chain before submitting deposit.
+    let approveState: { state: string; txHash?: string };
+    try {
+      approveState = await provider.waitForTransaction(approveTxId, {
+        maxAttempts: 60, // 60s — enough for Arc testnet blocks (~5s)
+        pollIntervalMs: 2000,
+      });
+    } catch (err) {
+      logger.warn(
+        { userId: session.userId, approveTxId, err: String(err) },
+        'gateway_topup:approve_did_not_confirm',
+      );
+      throw new AppError(
+        'BAD_GATEWAY',
+        `Approve transaction did not confirm in time. Circle tx ${approveTxId}. Please retry in a minute.`,
+        504,
+      );
+    }
+    logger.info(
+      { userId: session.userId, approveTxId, state: approveState.state },
+      'gateway_topup:approve_confirmed',
+    );
+
     // 2. deposit(USDC, amount) on GatewayWallet
     const depositRes = await provider.executeContract({
       walletId: wallet.providerWalletId,
@@ -99,6 +126,31 @@ export const POST = withApi(
       'gateway_topup:deposit_submitted',
     );
 
+    // Wait for deposit to confirm. If it fails, surface that to the
+    // user so they know their USDC is still on-chain (we don't want
+    // silent loss of funds).
+    let depositState: { state: string; txHash?: string };
+    try {
+      depositState = await provider.waitForTransaction(depositTxId, {
+        maxAttempts: 60,
+        pollIntervalMs: 2000,
+      });
+    } catch (err) {
+      logger.warn(
+        { userId: session.userId, depositTxId, err: String(err) },
+        'gateway_topup:deposit_did_not_confirm',
+      );
+      throw new AppError(
+        'BAD_GATEWAY',
+        `Deposit submitted but did not confirm in time. Circle tx ${depositTxId}. Check status later.`,
+        504,
+      );
+    }
+    logger.info(
+      { userId: session.userId, depositTxId, state: depositState.state },
+      'gateway_topup:deposit_confirmed',
+    );
+
     // Mark throttle so the auto-deposit helper doesn't fire within 24h.
     await prisma.wallet.update({
       where: { id: wallet.id },
@@ -110,8 +162,10 @@ export const POST = withApi(
         ok: true,
         amountUsdc,
         approveTxId,
+        approveTxHash: approveState.txHash,
         depositTxId,
-        note: 'Both txs submitted. Gateway Balance credits ~13 min after both mine.',
+        depositTxHash: depositState.txHash,
+        note: 'Both txs confirmed. Gateway Balance credits ~13 min after Circle\'s next batch settles.',
       }),
       { status: 200, headers: { 'content-type': 'application/json' } },
     );

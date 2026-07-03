@@ -115,21 +115,31 @@ export async function runSplitWorker() {
                 status: 'pending',
               },
             });
+            // Resolve the recipient's DCW wallet so we can write both
+            // toUserId AND toWalletId on the ledger entry. Without
+            // toWalletId, /api/wallet/transactions won't surface this
+            // credit to the artist's dashboard — they only see their
+            // own Wallet rows.
+            const recipientWallet = await tx.wallet.findUnique({
+              where: { userId: recipient.userId },
+              select: { id: true, address: true },
+            });
             await tx.ledgerEntry.create({
               data: {
                 paymentId,
                 payoutId: payout.id,
                 fromAddress: '0x0000000000000000000000000000000000000000',
                 fromWalletId: null,
-                toAddress: recipient.externalWalletAddress ?? '',
+                toAddress: recipientWallet?.address ?? recipient.externalWalletAddress ?? '',
                 toUserId: recipient.userId,
-                toWalletId: null,
+                toWalletId: recipientWallet?.id ?? null,
                 grossAmountBaseUnits: payment.amountBaseUnits,
                 splitAmountBaseUnits: split.amountUsdc.replace('.', '').padEnd(8, '0'),
                 direction: 'credit',
                 kind: 'royalty_payout',
                 status: 'pending',
                 memo: `Split for ${recipient.role}`,
+                chainTxHash: payment.txHash ?? null,
               },
             });
           }

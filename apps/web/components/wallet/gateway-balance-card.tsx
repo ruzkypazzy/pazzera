@@ -198,12 +198,11 @@ export function GatewayBalanceCard({ role }: { role: 'listener' | 'artist' }) {
             <label className="text-[10px] text-fg-muted uppercase">Withdraw to on-chain</label>
             <Input
               type="number"
-              step="0.001"
-              min="0.001"
-              max="10000"
+              step="0.01"
+              min="1"
               value={withdrawAmount}
               onChange={(e) => setWithdrawAmount(e.target.value)}
-              disabled={busy || balanceNum <= 0}
+              disabled={busy || balanceNum < 1}
             />
           </div>
           <Button type="submit" disabled={busy || balanceNum <= 0} variant="secondary" size="sm">

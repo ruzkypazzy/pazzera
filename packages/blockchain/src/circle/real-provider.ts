@@ -204,6 +204,38 @@ export class CircleRealProvider implements CircleProvider {
     return r;
   }
 
+  /**
+   * Poll GET /v1/w3s/developer/transactions/{id} until the tx reaches a
+   * terminal state. Circle contract execution returns INITIATED/COMPLETE/
+   * FAILED/CANCELLED. Most flows (approve → deposit, for example) require
+   * the previous tx to be COMPLETE before submitting the next — otherwise
+   * the second tx reverts with "allowance not set" or "insufficient funds".
+   *
+   * Returns the final state object. Throws if the tx FAILED or is
+   * CANCELLED. Times out after maxAttempts * pollIntervalMs.
+   */
+  async waitForTransaction(
+    txId: string,
+    opts: { maxAttempts?: number; pollIntervalMs?: number } = {},
+  ): Promise<{ id: string; state: string; txHash?: string }> {
+    const maxAttempts = opts.maxAttempts ?? 30; // 30 * 1s = 30s
+    const pollIntervalMs = opts.pollIntervalMs ?? 1000;
+    const url = `${this.baseUrl}/v1/w3s/developer/transactions/${txId}`;
+    for (let i = 0; i < maxAttempts; i++) {
+      const r = await this.request<{ data?: { id: string; state: string; txHash?: string } }>({
+        method: 'GET',
+        url,
+      });
+      const state = r?.data?.state;
+      if (state === 'COMPLETE') return r.data!;
+      if (state === 'FAILED' || state === 'CANCELLED') {
+        throw new Error(`Circle tx ${txId} ended in state ${state}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+    throw new Error(`Circle tx ${txId} did not confirm within ${(maxAttempts * pollIntervalMs) / 1000}s`);
+  }
+
   async signTypedData(input: { walletId: string; typedData: unknown }): Promise<{ v: number; r: Hex; s: Hex }> {
     // Per Circle's docs (POST /v1/w3s/developer/sign/typedData):
     // the body requires walletId, entitySecretCiphertext,

@@ -249,7 +249,23 @@ async function ensureListenerGatewayBalance(opts: {
       logger.warn({ userId, streamId, approve }, 'fan:gateway_topup:approve_no_id');
       return;
     }
-    await new Promise((r) => setTimeout(r, 10000));
+    // Wait for approve to actually confirm on-chain before submitting
+    // the deposit. Without this, on a slow block the deposit reverts
+    // with "missing approval" and the listener's auto-deposit silently
+    // fails (their Gateway Balance stays at 0 and the stream payment
+    // also reverts, leaving the artist unpaid).
+    try {
+      await (provider as any).waitForTransaction(approve.data.id, {
+        maxAttempts: 60, // up to 60s
+        pollIntervalMs: 2000,
+      });
+    } catch (err) {
+      logger.warn(
+        { userId, streamId, approveTxId: approve.data.id, err: String(err) },
+        'fan:gateway_topup:approve_did_not_confirm',
+      );
+      return;
+    }
     const deposit = await (provider as any).executeContract({
       walletId: listenerWallet.providerWalletId,
       contractAddress: gatewayWallet,
