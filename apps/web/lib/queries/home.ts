@@ -97,24 +97,30 @@ export async function getHomeFeed(): Promise<HomeFeed> {
   const since = new Date(Date.now() - DAY);
 
   // ---- Trending: aggregate completed payments in last 24h by song ----
-  // Payment.songId is the correct FK.
-  const trendingRaw = await safeQuery<
-    Array<{
-      songId: string;
-      _sum: { amountUsdc: any };
-      _count: { _all: number };
-    }>
+  // Payment.amountUsdc is a String in this schema, so Prisma's
+  // `groupBy({ _sum: ... })` doesn't accept it. Aggregate in JS instead.
+  const trendingRows = await safeQuery<
+    Array<{ songId: string; amountUsdc: string }>
   >(
     () =>
-      (prisma.payment.groupBy as any)({
-        by: ['songId'],
+      prisma.payment.findMany({
         where: { status: 'completed', settledAt: { gte: since } },
-        _sum: { amountUsdc: true },
-        _count: { _all: true },
-        take: 50, // grab more so we can sort manually after (Prisma groupBy can't orderBy on _sum)
+        select: { songId: true, amountUsdc: true },
+        take: 5000, // safety cap; we only need last 24h totals
       }) as any,
     [],
   );
+  const trendingAgg = new Map<string, { sumUsdc: number; plays: number }>();
+  for (const r of trendingRows) {
+    const v = trendingAgg.get(r.songId) ?? { sumUsdc: 0, plays: 0 };
+    v.sumUsdc += parseUsdc(r.amountUsdc);
+    v.plays += 1;
+    trendingAgg.set(r.songId, v);
+  }
+  const trendingRaw = Array.from(trendingAgg.entries())
+    .map(([songId, v]) => ({ songId, _sum: { amountUsdc: v.sumUsdc }, _count: { _all: v.plays } }))
+    .sort((a, b) => b._sum.amountUsdc - a._sum.amountUsdc)
+    .slice(0, 50);
 
   // Hydrate songs + artist metadata for the trending groupBy
   const trendingSongIds = trendingRaw.map((r) => r.songId);
@@ -154,7 +160,7 @@ export async function getHomeFeed(): Promise<HomeFeed> {
         genre: song.genre ?? null,
         rateUsdc: parseUsdc(song.publishedPriceUsdc ?? song.artistPriceUsdc ?? 0.003),
         publishedPriceUsdc: song.publishedPriceUsdc ?? song.artistPriceUsdc ?? '0.003',
-        totalEarningsUsdc: parseUsdc(r._sum.amountUsdc),
+        totalEarningsUsdc: r._sum.amountUsdc,
         totalPlays: r._count._all,
       } as FeedTrack;
     })
