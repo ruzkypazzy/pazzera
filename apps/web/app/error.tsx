@@ -1,14 +1,15 @@
 'use client';
 
 /**
- * Phase 10 — root error boundary for the App Router.
+ * Phase 12 — root error boundary for the App Router.
  *
- * Triggered when any route's RSC payload throws or when a server action
- * fails synchronously. Logs the failure server-side via the structured
- * logger and offers the user a retry / dashboard escape hatch.
+ * Client component. Must NOT import from @pazzera/core or any other server-only
+ * module — Next.js still tries to bundle those for the client error boundary,
+ * and they pull in Node built-ins (child_process, ioredis, etc.) that fail the
+ * production build. The previous logger import has been removed; we now POST
+ * the error to the server-side log endpoint instead.
  */
 import { useEffect } from 'react';
-import { logger } from '@pazzera/core';
 
 interface RootErrorProps {
   error: Error & { digest?: string };
@@ -17,15 +18,38 @@ interface RootErrorProps {
 
 export default function RootError({ error, reset }: RootErrorProps): JSX.Element {
   useEffect(() => {
-    logger.error(
-      {
-        surface: 'root_error_boundary',
-        digest: error.digest,
-        message: error.message,
-        stack: error.stack,
-      },
-      'web:root_error',
-    );
+    // Surface the error details to the dev console AND the server log so
+    // we can actually diagnose what's throwing — the previous version
+    // POSTed a body shape the API endpoint didn't expect, so the actual
+    // error info was lost in production logs.
+    if (typeof window !== 'undefined') {
+      try {
+        // eslint-disable-next-line no-console
+        console.error('[root_error_boundary]', {
+          digest: error.digest,
+          message: error.message,
+          stack: error.stack,
+        });
+        fetch('/api/log/client-error', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            surface: 'root_error_boundary',
+            correlationId: error.digest ?? null,
+            error: {
+              name: error.name ?? 'Error',
+              message: error.message,
+              stack: error.stack ?? null,
+            },
+            url: window.location.href,
+            userAgent: navigator.userAgent,
+            ts: new Date().toISOString(),
+          }),
+        }).catch(() => undefined);
+      } catch {
+        /* swallow — error boundary must not throw */
+      }
+    }
   }, [error]);
 
   return (
@@ -45,15 +69,12 @@ export default function RootError({ error, reset }: RootErrorProps): JSX.Element
         <button
           type="button"
           onClick={reset}
-          className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white"
+          className="btn-primary"
         >
           Retry
         </button>
-        <a
-          href="/dashboard"
-          className="rounded-md border border-border bg-bg-muted px-4 py-2 text-sm font-medium text-fg"
-        >
-          Dashboard
+        <a href="/home" className="btn-secondary">
+          Home
         </a>
       </div>
     </div>
