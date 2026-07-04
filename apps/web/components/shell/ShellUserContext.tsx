@@ -10,7 +10,12 @@ export type ShellUser = {
   username?: string;
 };
 
-export const ShellUserContext = createContext<ShellUser | null>(null);
+// Export the Provider separately so server components (which can't
+// call `useContext`) can still wrap children in the provider without
+// having to access `.Provider` on the default-exported context object.
+export const ShellUserProvider = createContext<ShellUser | null>(null).Provider;
+
+const ShellUserContext = createContext<ShellUser | null>(null);
 
 export function useShellUser(): ShellUser {
   const ctx = useContext(ShellUserContext);

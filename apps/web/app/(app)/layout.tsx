@@ -3,7 +3,7 @@ import { getCurrentSession } from '@/lib/session';
 import { prisma } from '@pazzera/core';
 import { PaymentToastHost } from '@/components/realtime/payment-toast-host';
 import { PlayerBar } from '@/components/shell/PlayerBar';
-import { ShellUserContext, type ShellUser } from '@/components/shell/ShellUserContext';
+import { ShellUserProvider, type ShellUser } from '@/components/shell/ShellUserContext';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getCurrentSession();
@@ -40,10 +40,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // AppShell). It owns the real <audio> element that listens for
   // pazzera:play events and actually plays music.
   return (
-    <ShellUserContext.Provider value={shellUser}>
+    <ShellUserProvider value={shellUser}>
       {children}
       <PaymentToastHost />
       <PlayerBar />
-    </ShellUserContext.Provider>
+    </ShellUserProvider>
   );
 }
