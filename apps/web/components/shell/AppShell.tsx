@@ -3,7 +3,6 @@
 import React from 'react';
 import { TopHeader } from './TopHeader';
 import { BottomNav } from './BottomNav';
-import { useShellUser } from './ShellUserContext';
 
 type Props = {
   children: React.ReactNode;
@@ -15,26 +14,20 @@ type Props = {
 };
 
 /**
- * Client shell. Source of truth for role + wallet balance is the
- * `ShellUserContext` populated by `app/(app)/layout.tsx` (server-side
- * Prisma fetch on every navigation). Explicit props win over the
- * context so a page can override (rare).
+ * Client shell. Pages pass their own isArtist / walletBalance / displayName
+ * / username props. We don't read from a shared context anymore — earlier
+ * version of this file used ShellUserContext, but that pulled server-side
+ * Prisma fetch into the global layout and broke client-side hydration
+ * on /home for some users.
  */
 export function AppShell({
   children,
-  isArtist: isArtistProp,
-  isAdmin: isAdminProp,
-  walletBalance: walletBalanceProp,
-  displayName: displayNameProp,
-  username: usernameProp,
+  isArtist = false,
+  isAdmin = false,
+  walletBalance = '0.00',
+  displayName,
+  username,
 }: Props) {
-  const ctx = useShellUser();
-  const isArtist = isArtistProp ?? ctx.isArtist;
-  const isAdmin = isAdminProp ?? ctx.isAdmin;
-  const walletBalance = walletBalanceProp ?? ctx.walletBalance;
-  const displayName = displayNameProp ?? ctx.displayName;
-  const username = usernameProp ?? ctx.username;
-
   return (
     <div className="min-h-screen" style={{ background: '#0A0A0A' }}>
       <TopHeader

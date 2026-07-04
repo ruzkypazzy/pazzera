@@ -48,6 +48,8 @@ export default async function HomePage() {
       isArtist={isArtist}
       isAdmin={isAdmin}
       walletBalance={balanceStr}
+      displayName={user?.displayName ?? undefined}
+      username={user?.username ?? undefined}
     >
       <div className="mx-auto max-w-screen-xl space-y-8 px-4 py-6 md:px-8">
         {/* === HERO === */}

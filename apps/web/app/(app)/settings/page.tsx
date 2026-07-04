@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { AppShell } from '@/components/shell/AppShell';
 import { SignOutButton } from '@/components/auth/SignOutButton';
+import { getCurrentSession } from '@/lib/session';
+import { prisma } from '@pazzera/core';
 
 export const dynamic = 'force-dynamic';
 
@@ -8,9 +10,31 @@ export const metadata = {
   title: 'Settings — Pazzera',
 };
 
-export default function SettingsPage() {
+export default async function SettingsPage() {
+  const session = await getCurrentSession();
+  const user = session
+    ? await prisma.user.findUnique({
+        where: { id: session.userId },
+        select: { isArtist: true, role: true, displayName: true, username: true },
+      })
+    : null;
+  const wallet = session
+    ? await prisma.wallet.findUnique({
+        where: { userId: session.userId },
+        select: { balanceUsdc: true },
+      })
+    : null;
+  const isArtist = !!user?.isArtist || user?.role === 'artist';
+  const isAdmin = user?.role === 'admin';
+  const walletBalance = wallet?.balanceUsdc != null ? Number(wallet.balanceUsdc).toFixed(2) : '0.00';
   return (
-    <AppShell>
+    <AppShell
+      isArtist={isArtist}
+      isAdmin={isAdmin}
+      walletBalance={walletBalance}
+      displayName={user?.displayName ?? undefined}
+      username={user?.username ?? undefined}
+    >
       <div className="mx-auto max-w-2xl space-y-6 px-4 py-8 md:px-8">
         <header>
           <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#00D4AA]">Account</div>

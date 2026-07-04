@@ -11,6 +11,8 @@ import {
 } from 'lucide-react';
 import { AppShell } from '@/components/shell/AppShell';
 import { PazzeraLogo } from '@/components/logo';
+import { getCurrentSession } from '@/lib/session';
+import { prisma } from '@pazzera/core';
 
 type UploadState = 'idle' | 'uploading-audio' | 'uploading-cover' | 'submitting' | 'success' | 'error';
 
@@ -44,7 +46,23 @@ function makeKey() {
   return Math.random().toString(36).slice(2, 10);
 }
 
-export default function UploadPage() {
+export default async function UploadPage() {
+  const session = await getCurrentSession();
+  const user = session
+    ? await prisma.user.findUnique({
+        where: { id: session.userId },
+        select: { isArtist: true, role: true, displayName: true, username: true },
+      })
+    : null;
+  const wallet = session
+    ? await prisma.wallet.findUnique({
+        where: { userId: session.userId },
+        select: { balanceUsdc: true },
+      })
+    : null;
+  const isArtist = !!user?.isArtist || user?.role === 'artist';
+  const isAdmin = user?.role === 'admin';
+  const walletBalance = wallet?.balanceUsdc != null ? Number(wallet.balanceUsdc).toFixed(2) : '0.00';
   const router = useRouter();
 
   // Profile (for auto-fill)
@@ -449,7 +467,13 @@ export default function UploadPage() {
   // always available when finalize runs — no useEffect race.)
 
   return (
-    <AppShell>
+    <AppShell
+      isArtist={isArtist}
+      isAdmin={isAdmin}
+      walletBalance={walletBalance}
+      displayName={user?.displayName ?? undefined}
+      username={user?.username ?? undefined}
+    >
       <div className="mx-auto max-w-3xl space-y-6 pb-32">
         <header>
           <div className="flex items-center gap-3">
