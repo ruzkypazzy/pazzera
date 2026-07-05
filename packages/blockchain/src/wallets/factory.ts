@@ -19,7 +19,7 @@ let cached: WalletProvider | null = null;
 function selectFromEnv(): WalletProvider {
   const explicit = process.env.PAZZERA_WALLET_PROVIDER?.trim();
   if (explicit === 'local-dev') return new LocalDevWalletProvider();
-  if (explicit === 'circle-ucw') return new CircleWalletProvider();
+  if (explicit === 'circle-ucw' || explicit === 'circle-dcw') return new CircleWalletProvider();
   if (explicit === 'arc-native') return new ArcNativeWalletProvider();
   if (process.env.NODE_ENV === 'production') return new CircleWalletProvider();
   return new LocalDevWalletProvider();

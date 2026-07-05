@@ -1,0 +1,47 @@
+# Pazzera docker build context excludes
+# node_modules + .next are restored from deps/builder stages, never COPY'd from host.
+
+# Dependencies (rebuilt by pnpm install in deps stage)
+**/node_modules/
+**/.pnpm-store/
+
+# Build output (rebuilt by `next build` in builder stage)
+**/.next/
+**/dist/
+**/build/
+**/out/
+**/*.tsbuildinfo
+
+# Test artifacts
+**/coverage/
+**/.nyc_output/
+**/playwright-report/
+**/test-results/
+
+# Logs and tmp
+**/*.log
+**/.npm/
+**/.cache/
+**/.turbo/
+**/.next-cache/
+
+# Editor / OS junk
+**/.vscode/
+**/.idea/
+**/.DS_Store
+**/.git/
+**/.gitignore
+**/.gitkeep
+
+# Env (env is read from .env in build context, but ignore
+# local-only override files)
+.env.local
+.env.*.local
+
+# Backup / snapshot files
+**/.backups/
+**/.snapshots/
+docs/
+
+# This file itself
+.dockerignore

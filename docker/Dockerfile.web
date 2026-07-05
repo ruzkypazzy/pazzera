@@ -27,6 +27,10 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/apps/web/node_modules ./apps/web/node_modules
 COPY --from=deps /app/packages ./packages
 COPY . .
+# Inject .env so static page prerendering (which validates env vars at
+# module load) succeeds in the build container. .env is in the build
+# context (mounted from /opt/pazzera/.env); COPY it explicitly.
+COPY .env .env
 RUN corepack enable && corepack prepare pnpm@9.15.9 --activate && pnpm --filter @pazzera/web build
 
 # Runtime
@@ -44,8 +48,10 @@ COPY --from=builder /app/packages ./packages
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/apps/web/server.ts ./apps/web/server.ts
 COPY --from=builder /app/apps/web/package.json ./apps/web/package.json
+RUN mkdir -p /app/data/agent-stage && \
+    chmod 777 /app/data/agent-stage && \
+    chmod -R 777 /tmp/pazzera-uploads 2>/dev/null || true
 USER pazzera
-RUN mkdir -p /tmp/pazzera-uploads && chmod 777 /tmp/pazzera-uploads
 EXPOSE 3000
 ENTRYPOINT ["/usr/bin/tini", "--"]
 # Custom server boots Next.js HTTP server and attaches Socket.IO to

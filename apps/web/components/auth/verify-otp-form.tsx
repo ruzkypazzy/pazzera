@@ -6,6 +6,14 @@ import { Button } from '@/components/ui/button';
 export function VerifyOtpForm({ email }: { email: string }) {
   const router = useRouter();
   const [code, setCode] = useState(['', '', '', '', '', '']);
+  const [username, setUsername] = useState<string>(() => {
+    // Pre-fill from the local part of the email so the user only has to edit.
+    if (typeof window === 'undefined') return '';
+    const stored = sessionStorage.getItem('pazzera:signin:email');
+    const src = stored ?? email;
+    const local = src.split('@')[0] ?? '';
+    return local.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 20);
+  });
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const [resendCooldown, setResendCooldown] = useState(30);
@@ -52,11 +60,17 @@ export function VerifyOtpForm({ email }: { email: string }) {
   function submit(fullCode: string) {
     setError(null);
     setVerifying(true);
+    // Read the role the user picked during sign-in (default to listener)
+    const role = (typeof window !== 'undefined'
+      ? (sessionStorage.getItem('pazzera:signin:role') as 'listener' | 'artist' | null)
+      : null) || 'listener';
+    // Send the chosen username; server validates and falls back if invalid.
+    const chosenUsername = username.trim().toLowerCase() || undefined;
     startTransition(async () => {
       const res = await fetch('/api/auth/verify-otp', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ email, code: fullCode }),
+        body: JSON.stringify({ email, code: fullCode, role, username: chosenUsername }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -70,7 +84,12 @@ export function VerifyOtpForm({ email }: { email: string }) {
       if (data.walletStatus === 'pending_provisioning') {
         sessionStorage.setItem('pazzera:welcome:newUser', '1');
       }
-      router.push('/dashboard');
+      // Clear role from sessionStorage (consumed)
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem('pazzera:signin:role');
+      }
+      const next = new URLSearchParams(window.location.search).get('next') || '/home';
+      router.push(next);
       router.refresh();
     });
   }
@@ -92,6 +111,28 @@ export function VerifyOtpForm({ email }: { email: string }) {
           We sent a 6-digit code to{' '}
           <span className="font-medium text-fg">{email}</span>. The code expires in 10 minutes.
         </p>
+      </div>
+
+      {/* Username — picked now so a new user gets a real handle on day one */}
+      <div className="space-y-1.5">
+        <label htmlFor="pazzera-username" className="block text-xs font-semibold uppercase tracking-widest text-[#B3B3B3]">
+          Choose a username
+        </label>
+        <div className="relative">
+          <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#6A6A6A]">@</span>
+          <input
+            id="pazzera-username"
+            className="input-square !pl-8"
+            value={username}
+            onChange={(e) => setUsername(e.target.value.replace(/[^a-z0-9_]/gi, '').toLowerCase().slice(0, 20))}
+            placeholder="yourhandle"
+            minLength={3}
+            maxLength={20}
+            required
+            autoComplete="username"
+          />
+        </div>
+        <p className="text-[10px] text-[#6A6A6A]">3–20 characters · lowercase a–z, 0–9, underscore</p>
       </div>
       <div className="flex justify-center gap-2" onPaste={onPaste}>
         {code.map((c, i) => (

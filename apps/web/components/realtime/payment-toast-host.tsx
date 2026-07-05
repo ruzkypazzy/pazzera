@@ -2,8 +2,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Music, Sparkles, X } from 'lucide-react';
-import { useRealtimePayments, useDemoPaymentSimulation, type PaymentToastEvent } from '@/lib/realtime';
-import { useDemoMode } from '@/lib/demo-mode';
+import { useRealtimePayments, type PaymentToastEvent } from '@/lib/realtime';
 
 interface ToastItem {
   id: string;
@@ -19,7 +18,6 @@ const TOAST_TTL_MS = 6500;
 
 export function PaymentToastHost() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const demo = useDemoMode();
 
   const onEvent = useCallback((evt: PaymentToastEvent) => {
     setToasts((prev) => {
@@ -54,7 +52,12 @@ export function PaymentToastHost() {
   }, []);
 
   useRealtimePayments(onEvent);
-  useDemoPaymentSimulation(demo.enabled, onEvent);
+  // NOTE: demo payment simulation removed — the fake "Stream qualified" / "Split
+  // Agent distributed" toasts were firing every 12s with fabricated artists
+  // (pixel_pete, tunde, beatsbyneo) and amounts, which is misleading. Toasts now
+  // only fire when a real on-chain payment settlement arrives via Socket.IO.
+  // To re-enable for a controlled demo: pass `enabled={true}` and re-add the
+  // useDemoPaymentSimulation hook + import.
 
   // Auto-dismiss
   useEffect(() => {

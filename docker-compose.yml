@@ -79,7 +79,11 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER:-pazzera}:${POSTGRES_PASSWORD:-pazzera}@postgres:5432/${POSTGRES_DB:-pazzera}?schema=public
       REDIS_URL: redis://redis:6379/0
-    command: ["node", "dist/packages/agents/src/workers/run.js"]
+    volumes:
+      # Same local storage root as the web container, so the worker
+      # can read the audio/cover files the web container wrote.
+      - /opt/pazzera/.local-storage:/tmp/pazzera-uploads
+    command: ["node_modules/.bin/tsx", "packages/agents/src/workers/run.ts"]
 
 volumes:
   postgres-data:

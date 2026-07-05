@@ -1,6 +1,9 @@
-# Pazzera worker image — BullMQ agent workers
-FROM node:20-alpine AS base
-RUN apk add --no-cache libc6-compat ffmpeg tini
+# Pazzera worker image — BullMQ agent workers. Uses Debian (libssl3)
+# so the Prisma engine can load on the same image as the web container.
+FROM node:20-bookworm-slim AS base
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libc6 tini openssl ca-certificates ffmpeg \
+ && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
 FROM base AS deps
@@ -11,24 +14,25 @@ COPY packages/storage/package.json packages/storage/
 COPY packages/blockchain/package.json packages/blockchain/
 COPY packages/queue/package.json packages/queue/
 COPY packages/agents/package.json packages/agents/
-RUN corepack enable && corepack prepare pnpm@9.6.0 --activate && pnpm install --frozen-lockfile
+COPY packages/realtime/package.json packages/realtime/
+COPY packages/upload/package.json packages/upload/
+RUN corepack enable && corepack prepare pnpm@9.15.9 --activate && pnpm install --no-frozen-lockfile
 
 FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/packages ./packages
 COPY . .
-RUN corepack enable && corepack prepare pnpm@9.6.0 --activate && \
-    pnpm --filter @pazzera/agents build && \
-    pnpm --filter @pazzera/core build && \
-    pnpm --filter @pazzera/db build && \
-    pnpm --filter @pazzera/queue build && \
-    pnpm --filter @pazzera/blockchain build
+RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 
 FROM base AS runner
 ENV NODE_ENV=production
-RUN addgroup -g 1001 -S nodejs && adduser -S pazzera -u 1001
+RUN groupadd -g 1001 nodejs && useradd -u 1001 -g nodejs -m -s /bin/bash pazzera
 COPY --from=builder /app/packages ./packages
 COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/pnpm-workspace.yaml ./
+COPY --from=builder /app/package.json ./
+COPY --from=builder /app/.npmrc ./
 USER pazzera
-ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["node", "packages/agents/dist/workers/run.js"]
+# Run all workers via tsx (no build step needed for TS).
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["node_modules/.bin/tsx", "packages/agents/src/workers/run.ts"]

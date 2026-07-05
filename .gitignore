@@ -45,3 +45,36 @@ uploads/
 
 # Prisma
 packages/db/prisma/migrations/dev.db*
+
+# Dev debug scripts (one-off investigation tools, not production code)
+diag*.sh
+diag*.py
+fix*.py
+fix*.sh
+add_import*.py
+ssh_run.py
+scp_file.py
+worker.cjs
+package.json.bak
+dedup.py
+
+# Local Stage 0 one-off scripts (under scripts/ root) — debug only
+/scripts/circle-test-sign.mjs
+/scripts/deposit-to-gateway.ts
+/scripts/reprocess-stream.mjs
+/scripts/reprocess-stream.ts
+/scripts/start-worker.sh
+/scripts/test-circle-sign.ts
+/scripts/test-export.ts
+/scripts/test-finalize.mjs
+/scripts/test-fresh.ts
+/scripts/test-settle-only.ts
+/scripts/verify-only.ts
+
+# Snapshot docs (development context — kept local, not in repo)
+PAZZERA_STATE_SNAPSHOT.md
+PAZZERA_BACKEND_SNAPSHOT.md
+PAZZERA_DESIGN_TOKENS.md
+PAZZERA_COMPONENT_INVENTORY.md
+LOCKED_BASELINE.md
+LOCK_GATE.sh
