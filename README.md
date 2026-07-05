@@ -1,7 +1,7 @@
 # Pazzera
 
-> **Decentralized pay-per-listen music streaming on Arc Testnet.**
-> Every stream past the 25% threshold fires a USDC nano payment
+> **The artist-first music streaming protocol.**
+> Every stream past the 25% mark fires a USDC nano payment
 > directly to the artist — no middlemen, no monthly fees, no
 > waiting months for royalties.
 
@@ -15,12 +15,144 @@
 
 ---
 
-## What Pazzera actually does
+## The problem we set out to solve
 
-1. **Sign in** with email + one-time code (Argon2id-hashed at rest,
-   Resend-delivered, rate-limited 5/hr).
+A kid in Lagos drops a beat. A producer in São Paulo adds a verse.
+A singer in Seoul adds the hook. They upload it to the major
+streaming platforms and the math goes like this:
+
+- Spotify pays roughly **$0.003 per stream**.
+- The platform takes its cut (~30%).
+- The label takes its cut (~50%).
+- The aggregator, the distributor, the payment processor — they
+  each take a slice.
+- The royalty check happens **monthly at best, quarterly at worst**.
+- Payouts only fire when you've crossed a **$10–$50 threshold**
+  depending on the platform and country.
+- You can't see who's listening, where, or how often.
+- You can't pay your collaborators without spreadsheets and
+  bank transfers.
+- If your track isn't a hit, you earn nothing. The platforms don't
+  surface unknowns.
+
+So the kid in Lagos makes a song, gets 4,000 streams in a year, and
+gets a **$8 royalty payment** to a bank account in a country where
+$8 doesn't even cover the cost of the data plan that uploaded the
+song. The producer in São Paulo never gets paid at all because they
+weren't on the legal entity paperwork. The singer in Seoul waits six
+months for the quarterly statement.
+
+**This is the broken status quo for independent music on the
+internet.** The platforms make their money from ads and
+subscriptions; the artist is a line item in a spreadsheet, paid
+last and paid least.
+
+### The people we built Pazzera for
+
+#### Independent artists (the primary users)
+
+**Before Pazzera:**
+- Upload a song → wait weeks for review → maybe published, maybe
+  rejected with no real feedback
+- Earn fractions of a cent per stream, paid months later
+- Can't split royalties to collaborators automatically
+- Can't see who actually listened
+- Pay $10–30/month for "Pro" tools that mostly just gate features
+  you already have on a free tier
+
+**With Pazzera:**
+- Drop a song + cover → the **PAZZERA BOT** AI agent analyzes the
+  audio, captions the cover, suggests title/mood tags/fair rate
+  in chat → publish in 60 seconds
+- Earn **0.001–0.005 USDC per stream**, paid the moment a listener
+  crosses the 25% threshold
+- Splits go to collaborators **automatically**, atomically, on-chain
+- Every payment is auditable: click a row, see the tx hash, see
+  the split breakdown
+- No monthly fees. No "Pro" tier. No lock-in.
+
+#### Collaborators (featured artists, producers, songwriters)
+
+**Before Pazzera:**
+- You collaborated on a hit, but you signed no paperwork. The
+  primary artist uploaded it and you never see a cent.
+- Or: you signed paperwork, but it requires chasing the artist
+  every quarter for a bank transfer.
+- Or: you got paid once, but the song keeps streaming and you don't
+  see the ongoing share.
+
+**With Pazzera:**
+- Get added as a recipient at upload time, with a `@username` and
+  a `splitPercentageBps`. That's it.
+- Every stream triggers a smart contract–level split.
+- Your wallet gets credited **every time**, forever, for the life
+  of the song.
+- If you're not on Pazzera yet, the song still credits you in the
+  metadata; you can claim your share when you sign up.
+
+#### Listeners
+
+**Before Pazzera:**
+- Subscribe to Spotify for $11.99/month, the artist sees $0.002 of
+  that per stream.
+- Buy an NFT for $200 hoping the artist gets most of it (they don't,
+  gas + marketplace cut eats 15–30%).
+- Tip via Venmo/CashApp and hope it doesn't bounce.
+
+**With Pazzera:**
+- Sign up with email, no card, no KYC for listening.
+- Press play. Listen past 25%. **One USDC micro-payment fires** from
+  your Circle Gateway balance straight to the artist.
+- The cost? Less than a cent. The signal? "I actually care about
+  this song enough to pay for it."
+- You're not "streaming" in the passive sense. You're
+  **micro-tipping** in the active sense, and the cost is invisible
+  because Circle Gateway batches it.
+
+#### Labels, distributors, curators (optional intermediaries)
+
+**Before Pazzera:**
+- Take 50–70% of streaming revenue in exchange for promotion.
+- Artists who don't sign are locked out of the major platforms.
+
+**With Pazzera:**
+- Optional: add a label/manager as a credit-only recipient (gets
+  the public credit on the song page, but no payout — the artist
+  pays them separately, off-platform, however they want).
+- Or: add as a paid recipient with a small percentage. Full
+  transparency; no hidden take-rate.
+- The Curator Agent still reviews uploads for quality. But it
+  doesn't gatekeep by industry connections.
+
+### What we believe
+
+1. **The artist should be paid first, paid fast, and paid often.**
+2. **Every stream should be a micro-transaction.** A cent is too
+   much. A thousandth of a cent is the right number for most
+   listeners — and the artists still add up to real income at scale.
+3. **Collaborators shouldn't need paperwork to get paid.** A
+   username and a percentage is enough.
+4. **The platform shouldn't be a gatekeeper.** Curator review is
+   for quality, not exclusivity.
+5. **AI should handle the boring parts** (metadata, mood tags,
+   rate suggestions, royalty splits) **so humans can focus on the
+   music.** PAZZERA BOT is the first application of this.
+6. **On-chain doesn't mean crypto-bro.** Circle Gateway + x402
+   abstracts the wallet so listeners don't see gas, addresses, or
+   signing popups. They just sign in with email and listen.
+
+---
+
+## How Pazzera works
+
+When a listener signs in and presses play, here's what happens
+under the hood — in plain English:
+
+1. **Sign in** with email + one-time code (Argon2id-hashed at
+   rest, Resend-delivered, rate-limited 5/hr).
 2. **Discover** music with explainable AI agents (Curator, Fan,
-   Split, Discovery, Fraud-Sentinel) — every decision is logged.
+   Split, Discovery, Fraud-Sentinel) — every decision is logged
+   for transparency.
 3. **Press play** — the listener-side `StreamAggregator` streams
    ticks to the realtime socket over WebSocket.
 4. **Cross 25%** — the Fan Agent calculates a fair per-stream price
@@ -41,11 +173,12 @@ Hit **Upload a track** anywhere in the app and you'll meet the AI
 upload agent. Drop your audio + cover, chat about the vibe, and the
 bot:
 
-- Analyzes audio (duration, bitrate, channels, energy, mood from ID3
-  tags) via `music-metadata` + heuristics
+- Analyzes audio (duration, bitrate, channels, energy, mood from
+  ID3 tags) via `music-metadata` + heuristics
 - Captions the cover art via GPT-4o vision
 - Suggests title, description, mood tags, audio quality, **fair
-  per-stream rate (0.001–0.005 USDC, never rejects)** via GPT-4o-mini
+  per-stream rate (0.001–0.005 USDC, never rejects)** via
+  GPT-4o-mini
 - Resolves Pazzera `@username` recipients against the DB (with
   fuzzy "did you mean?" if there's a prefix match)
 - Drives the LOCKED `/api/songs/create-draft` →
@@ -56,7 +189,9 @@ The bot is a real LLM-backed chatbot: every free-form message goes
 through OpenAI with a persona + current upload context. You can ask
 "What's a fair rate?", "How does Curator work?", or "Tell me a joke
 about producers" — it answers intelligently while still being able
-to recognize when you upload files.
+to recognize when you upload files. **It is not a chatbot that
+happens to upload. It's an upload tool that happens to chat.** The
+conversation is the UI.
 
 ---
 
@@ -195,30 +330,343 @@ pazzera/
 
 ---
 
-## Tech stack
+## The stack, and why each piece matters
 
-| Layer | Choice | Why |
-|---|---|---|
-| **Frontend** | Next.js 14 (App Router, RSC) | First-class SSR + streaming + server actions |
-| **Realtime** | Socket.IO over WebSocket | Battle-tested, plays nicely with Cloudflare |
-| **Database** | Postgres 16 | Triggers, partial indexes, JSONB, RLS-ready |
-| **ORM** | Prisma | Type-safe migrations, deterministic client |
-| **Queue** | BullMQ on Redis 7 | Priority queues, retries with backoff, repeatable jobs |
-| **Storage** | Cloudflare R2 (S3-compatible) | S3 API + presigned URLs + zero egress |
-| **Auth** | Email + OTP, Argon2id at rest | Passwordless; OTP TTL 10 min; rate-limited 5/hr |
-| **Crypto** | viem for EIP-712, HKDF master key, AES-256-GCM at rest | Battle-tested primitives |
-| **Payments** | x402 + Circle Gateway | One-time EIP-712 TransferWithAuthorization, settled by facilitator |
-| **Chain** | Arc Testnet (chainId 5042002) | USDC contract at `0x3600000000000000000000000000000000000000` |
-| **AI Agent** | OpenAI gpt-4o-mini + gpt-4o-vision | Cheap JSON-mode decisions, accurate vision captions |
-| **Workers** | tsx (no build step) + Docker (Debian + libssl3 for Prisma) | Reproducible, fast startup |
-| **Logs** | pino (structured JSON) | Pipe to any log shipper |
-| **Tests** | Vitest (unit), Playwright (e2e) | 91 deterministic tests, strict TS |
+This isn't just a tech list — it's a tour through the parts that
+make Pazzera possible and what each one does for the user. Pay
+special attention to the **Blockchain** and **Payments** sections
+if you're coming from a non-crypto background: they're the heart
+of the product.
 
-### Strict typing & tests
+### Frontend: Next.js 14 App Router
+
+**What it is.** Next.js is the React framework that powers the
+UI. The "App Router" is its file-system-based routing model —
+every folder under `apps/web/app/` is a URL.
+
+**Why it matters here.** Most of Pazzera's pages are partially
+**server-rendered** (analytics dashboards, payment timelines,
+artist profiles) and partially **client-interactive** (player,
+chat with PAZZERA BOT). App Router gives us both in the same
+component tree, without the awkwardness of older React setups.
+Server actions let the agent commit pipeline stay server-side
+without round-tripping through a JSON API.
+
+### Realtime: Socket.IO over WebSocket
+
+**What it is.** A persistent two-way socket between the listener's
+browser and our server. The server can push events (a new payment
+landed on the artist dashboard) without the client asking.
+
+**Why it matters here.** When a listener crosses 25% on a song,
+the listener needs to be told to sign the x402 envelope in the
+next ~30 seconds. The artist, watching their dashboard, needs to
+see the payment land in real time so they trust the system. Both
+sides speak through one Socket.IO connection per session, and
+rooms are organized by `userId` and `artistId` so events stay
+isolated.
+
+### Database: PostgreSQL 16 + Prisma ORM
+
+**What they are.** Postgres is a relational database with strong
+support for JSON columns, partial indexes, and row-level security.
+Prisma generates a fully-typed TypeScript client from a schema
+file, so every query is type-checked at compile time.
+
+**Why they matter here.** Every royalty split, every payment
+record, every agent decision is auditable. We need a database
+where you can ask complex questions ("show me every payment to
+artist X in the last 7 days, grouped by collaborator, with
+average stream length") and get an answer in milliseconds. The
+JSON columns on `agent_decisions` and `agent_upload_sessions`
+let us store AI reasoning transparently — open the admin panel,
+click on a decision, read the full chain of thought.
+
+### Queue: BullMQ on Redis
+
+**What they are.** A job queue system. The web server **enqueues**
+work ("analyze this audio file", "generate waveform", "send
+notification"); the worker process **dequeues** and runs them,
+with retries and backoff if they fail.
+
+**Why it matters here.** Waveform generation takes seconds. Cover
+generation runs a vision model. The Curator Agent deliberates.
+None of this can run inline on the request that received the
+upload — the listener has already closed the tab. So we return
+202 immediately and let the workers run in the background, with
+state machines to track progress.
+
+### Storage: Cloudflare R2 (S3-compatible)
+
+**What it is.** Object storage with the same API as AWS S3 but
+zero egress fees. We use it to store audio files and cover
+art. The upload route returns a **presigned URL** — a temporary
+URL that lets the browser PUT the file directly to R2, bypassing
+our server entirely.
+
+**Why it matters here.** Audio files are 5–20 MB each. Routing
+them through our web server would burn bandwidth and CPU on
+something the user could do directly. Presigned URLs let us
+offload: the browser uploads straight to R2, we just store the
+key.
+
+### Auth: Email + one-time code, Argon2id at rest
+
+**How it works.** The user enters their email. We generate a
+6-digit code, hash it with Argon2id (a slow, salted, memory-hard
+hash designed to resist GPU cracking), and store it in the DB.
+We email the plaintext code (via Resend). The user enters it. We
+hash what they entered, compare against the DB hash, and on
+match issue a session cookie.
+
+**Why it matters here.** There are no passwords to leak. Even if
+the DB is dumped, the codes are hashed with a slow algorithm
+that makes brute-force impractical. The 10-minute TTL and 5/hr
+rate limit shut down credential stuffing.
+
+### Crypto: viem for EIP-712, HKDF for key derivation, AES-256-GCM for at-rest
+
+**What each does.**
+- **viem** is a TypeScript library for Ethereum interactions.
+  It signs EIP-712 typed-data payloads (`TransferWithAuthorization`)
+  in the user's browser wallet or in a server-side wallet provider.
+- **HKDF** (HMAC-based Key Derivation Function) lets us derive a
+  fresh encryption key from a single master key + a per-user
+  salt. So even if one derived key leaks, the master key stays
+  safe.
+- **AES-256-GCM** is the symmetric encryption we wrap around
+  Circle's encrypted wallet tokens and user PII before writing
+  them to the database. If the DB is dumped, the secrets are
+  still useless without the master key.
+
+**Why it matters here.** Pazzera holds its users' wallet
+credentials. That makes us a high-value target. Every secret at
+rest is wrapped, every secret in transit is signed.
+
+---
+
+## The blockchain layer (deep dive)
+
+Now the part that makes Pazzera actually different from "yet
+another streaming service". Three primitives compose the payment
+pipeline: **USDC on Arc Testnet**, **x402** for one-time
+authorizations, and **Circle Gateway** for batching & settlement.
+Each one is necessary, and removing any of them would break the
+product.
+
+### Arc Testnet — the chain
+
+**What it is.** Arc is an EVM-compatible L1 designed for
+stablecoin payments. We're on testnet for the Lepton Hackathon
+(deadline Jul 6 2026), with mainnet deployment once contracts
+are audited.
+
+**Key parameters on testnet:**
+- `chainId`: **5042002**
+- `rpcUrl`: `https://rpc.testnet.arc-node.thecanteenapp.com/v1/<key>`
+- USDC contract: `0x3600000000000000000000000000000000000000`
+- USDC decimals: **6** (1 USDC = 1,000,000 micro-units)
+- Block time: sub-second finality (~600 ms)
+
+**Why Arc specifically?** Two reasons: (1) Circle's x402
+facilitator is wired to Arc testnet out of the box, which means
+settlement "just works" without us running our own indexer;
+(2) sub-second finality means a payment confirms in <2 seconds
+end-to-end, which is what you need when a listener is sitting
+on the "this song unlocks now" toast.
+
+**What lives on-chain.** Nothing about Pazzera's media (audio,
+cover, metadata) lives on-chain — that's stored in R2 + Postgres.
+What lives on-chain is the **payment record**: every `payment_authorized`
+event has a corresponding `TransferWithAuthorization` signed by
+the listener's wallet, eventually settled by the facilitator.
+
+### x402 — HTTP 402 "Payment Required", done right
+
+**What it is.** x402 is a protocol standard (from the HTTP 402
+status code, "Payment Required") that lets a server say "you need
+to pay for this resource, here's how". The flow:
+
+1. Client requests a paid endpoint.
+2. Server returns **HTTP 402** with an `x402-challenge` header:
+   the payment requirements (asset, amount, payTo, facilitator,
+   validity window).
+3. Client constructs an **EIP-712 `TransferWithAuthorization`**
+   payload: "I authorize the facilitator to move N micro-USDC
+   from my wallet to the artist's address, valid for 60 seconds,
+   with nonce X".
+4. Client signs it with their wallet's private key (this happens
+   invisibly — for DCW wallets, Circle does it server-side; for
+   external wallets, viem does it in the browser).
+5. Client retries the request with `x402-payment` header
+   containing the signed payload.
+6. Server verifies the signature, calls the facilitator, and
+   returns 200 with the resource.
+
+**Why it matters here.** x402 gives us **one-shot
+authorizations** instead of standing allowances. The listener
+does NOT have to approve an unlimited recurring spend on Pazzera.
+Every stream past 25% triggers a fresh 60-second signed
+authorization. If you stop listening, no more authorizations
+fire. If you close the tab, the worst case is one unpaid
+attempt for a song you didn't finish.
+
+This is the right primitive for micropayments: cheap to sign
+(gasless in practice, since Circle is the facilitator), capped
+in amount, single-use.
+
+### Circle Gateway — the settlement layer
+
+**What it is.** Circle Gateway is a service that batches transfers
+across Circle-issued stablecoins (USDC for us) using a
+**balance-based** model instead of the slow ERC-20 transfer
+model. Instead of every payment being a separate on-chain
+transaction, Gateway holds a pooled balance per user and
+rebalances in bulk.
+
+**Why it matters here.** Two reasons, both structural:
+
+**1. Micropayments need to be CHEAP.** A naive ERC-20 transfer
+of 0.002 USDC would cost more in gas than the payment itself.
+Gateway abstracts the actual chain movement into batched
+settlements, so the listener's wallet doesn't bleed gas on
+every song.
+
+**2. Listeners need friction-free top-up.** When a listener signs
+up, we deposit a small starting balance to their Circle Gateway
+wallet via the testnet faucet. From then on, every payment is
+just a balance debit — no on-chain signature on every song.
+The wallet calls (deposit, transfer, balance) all go through
+Circle's Developer-Controlled Wallets API, which is wrapped in
+`@pazzera/blockchain/src/providers/circle-real.ts`.
+
+**Key APIs we use:**
+- `POST /v1/wallets/{id}/balances` — fetch USDC + Gateway balance
+- `POST /v1/developer/transactions/transfer` — internal Gateway
+  transfer between Circle wallets
+- `POST /v1/faucet/circle` — testnet faucet drip (claims via
+  Circle's tap)
+- EIP-712 `signTypedData` — for x402 `TransferWithAuthorization`
+  and for Gateway's `BurnIntent` (cross-chain withdrawal to
+  external chains)
+
+### How they connect end-to-end
+
+Here's the full payment lifecycle for one stream past 25%:
+
+```
+Listener                   Pazzera Web               Fan Agent              Facilitator (Circle)
+   |                             |                         |                         |
+   |  play() past 25%            |                         |                         |
+   |---------------------------->|                         |                         |
+   |                             | tick stream + ask "due?"|                         |
+   |                             |------------------------>|                         |
+   |                             |       payment_due        |                         |
+   |                             |<------------------------|                         |
+   |                             |                         |                         |
+   |       x402 challenge        |                         |                         |
+   |<----------------------------|                         |                         |
+   |                             |                         |                         |
+   |  sign TransferWithAuth      |                         |                         |
+   |  (using DCW key, server-side)                         |                         |
+   |---------------------------->|                         |                         |
+   |                             |  POST /x402/pay         |                         |
+   |                             |-------------------------------------------------->|
+   |                             |                         |       settle            |
+   |                             |<--------------------------------------------------|
+   |                             |      txHash + status    |                         |
+   |       payment_settled       |                         |                         |
+   |<----------------------------|                         |                         |
+   |                             |                         |                         |
+   |                             |  Split Worker kicks in  |                         |
+   |                             |  (fan out to recipients)                         |
+   |                             |-------------------------------------------------->|
+   |                             |                         |   batch settle          |
+```
+
+**Critical invariant**: the listener never sees a signing popup.
+Circle DCW wallets sign server-side. The "magic" happens
+invisible to the user.
+
+### Why this stack, not Web3-disco-flavor-of-the-month
+
+We picked x402 + Circle Gateway on Arc specifically because:
+
+1. **Stablecoin-native.** No token volatility. 0.002 USDC is
+   0.002 USDC tomorrow and next month. Artists price in cents,
+   not vibes.
+2. **Friction-free top-up.** Circle DCW + testnet faucet means a
+   new listener can be paying for streams in 30 seconds, no
+   wallet extension needed.
+3. **Auditable by default.** Every `TransferWithAuthorization` is
+   verifiable on the block explorer. We pin a link in the admin
+   dashboard.
+4. **Cost-less for the listener.** Gateway batching means the
+   listener doesn't bleed gas on a million streams. The
+   facilitator absorbs the on-chain cost; we pay them a tiny
+   fee.
+5. **Composable.** If tomorrow we want to add a "tip the
+   producer 5 cents directly" feature, it's the same x402
+   primitive — just sign for a different recipient.
+
+### AI Agent: OpenAI gpt-4o-mini + gpt-4o-vision
+
+**Why both models.** `gpt-4o-mini` is cheap and fast for JSON-mode
+decisions ("given this audio analysis + cover caption, suggest
+title/mood/rate"). `gpt-4o` with vision is the right model for
+interpreting cover art ("this is an oil-painted portrait of a
+woman at sunset, dominant colors are crimson and gold"). We
+use the small model 90% of the time and the big model only for
+the cover caption step.
+
+**Why this matters.** PAZZERA BOT isn't a chatbot with an upload
+hard-coded — it's a real LLM that understands the audio, the
+cover, the artist's intent, and the recipient structure. The
+fallback "free chat" path even uses `gpt-4o-mini` for casual
+conversation so the agent never feels robotic. OpenAI is the
+LLM of choice here because the project's stack (`LLM_API_KEY`,
+`LLM_BASE_URL`) is compatible with any OpenAI-compatible
+endpoint — you can swap providers without rewriting the
+router.
+
+### Workers: tsx + Debian Docker
+
+**Why no build step.** Most TypeScript projects compile `.ts` to
+`.js` at deploy time. We use `tsx`, a runtime transpiler, so
+the workers run `.ts` files directly. This means a 10-second
+deploy instead of a 2-minute one, and no risk of the deployed
+`dist/` drifting from the source. The trade-off is slightly
+slower startup, but workers are long-lived so amortized cost
+is zero.
+
+**Why Debian, not Alpine.** Alpine ships `libssl.so.1.1` but
+Prisma's query engine needs `libssl.so.3`. We use the
+`node:20-bookworm-slim` base image so `libssl3` is already
+installed. Learned this the hard way — the worker container
+was silently failing because of this for weeks until the
+Hackathon crunch made it impossible to ignore.
+
+### Logs: pino
+
+**Why structured JSON.** Every log line is `{"level":"info",
+"msg":"payment_settled","txHash":"0x...","listener":"..."}`
+instead of `payment settled 0x... for ...`. This means we can
+ship logs to any aggregator (Datadog, Sentry, ELK) without
+re-parsing. It also means a `payment_settled` log line is
+queryable as an event, not a string.
+
+---
+
+## Strict typing & tests
 
 ```
 0 TypeScript errors repo-wide · strict mode ON · 91 deterministic tests
 ```
+
+Every PR runs:
+- `pnpm typecheck` — `tsc --noEmit` across all 9 packages
+- `pnpm test` — Vitest, unit + integration, in-memory SQLite
+- `pnpm test:e2e` — Playwright, real browser, real backend
 
 ```bash
 pnpm -r typecheck                     # all packages + web
