@@ -1,15 +1,33 @@
 # Pazzera
 
-> **The artist-first music streaming protocol.**
-> Every stream past the 25% mark fires a USDC nano payment
-> directly to the artist — no middlemen, no monthly fees, no
-> waiting months for royalties.
+> **Open the page, press play, the artist gets paid per stream.**
+> Built on USDC stablecoin payments on the Arc blockchain —
+> settled one stream at a time via the x402 protocol and Circle
+> Gateway, so every listener's purchase reaches the right wallet
+> in seconds with no subscription in between.
+
+**TL;DR for the technically curious.** Pazzera is a music streaming
+app where the payment primitive is a **stablecoin nanopayment**,
+not a monthly subscription. When a listener passes the 25% mark
+on a song, Pazzera's `Fan Agent` triggers an **x402** challenge:
+the listener signs a one-shot **EIP-712 `TransferWithAuthorization`**
+in USDC, the **Circle Gateway** facilitator atomically moves the
+USDC on the **Arc Testnet** chain, and the **Split Agent** fans the
+funds out to the artist + every registered collaborator according to
+their `splitPercentageBps`. The whole round-trip — trigger to
+settlement — is sub-second.
+
+If you don't know what any of those words mean, that's fine — the
+app never shows them. The wallet is provisioned for you at signup,
+top-up is a "Buy USDC" button, and the payment shows up as a single
+green ✓ on the artist's dashboard. The crypto is real and underneath;
+the UX is just an app.
 
 [![typecheck](https://img.shields.io/badge/typecheck-0%20errors-2ea043)]()
 [![tests](https://img.shields.io/badge/tests-91%20passing-2ea043)]()
 [![strict](https://img.shields.io/badge/typescript-strict-2ea043)]()
 [![license](https://img.shields.io/badge/license-MIT-2ea043)]()
-[![x402](https://img.shields.io/badge/payments-x402%20%2B%20Circle%20Gateway-7B5EFF)]()
+[![stack](https://img.shields.io/badge/payments-x402%20%2B%20Circle%20Gateway%20%2B%20Arc-7B5EFF)]()
 [![next.js](https://img.shields.io/badge/next.js-14-black)]()
 [![node](https://img.shields.io/badge/node-20%2B-339933)]()
 
@@ -148,9 +166,16 @@ wallet UI, not as a popup.*
 5. **AI should handle the boring parts** (metadata, mood tags,
    rate suggestions, royalty splits) **so humans can focus on the
    music.** PAZZERA BOT is the first application of this.
-6. **Crypto UX should get out of the way.** Listeners never see a
-   gas estimate, a signing popup, or a 12-word seed phrase. The
-   artist dashboard shows real numbers, not "0.002 ETH".
+6. **Crypto payments should be honest about what they are.**
+   Pazzera is a crypto app: the wallet is funded in USDC, and
+   you can see your balance and transaction history at any time.
+   We don't hide the chain — we just don't make you wrestle with
+   it. There are no gas estimates to approve, no browser-extension
+   signing popups, no 12-word seed phrases, no confusing 0x…
+   addresses in the UI. The artist dashboard shows real numbers
+   in USDC, not "0.002 ETH". Wallets are Circle Developer-Controlled,
+   so the keys live behind a managed custody boundary rather than
+   on a device the user might lose.
 
 ---
 
