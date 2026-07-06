@@ -1,5 +1,7 @@
 # Pazzera
 
+**Pazzera is an AI-agent-operated music streaming app.**
+
 > **Open the page, press play, the artist gets paid per stream.**
 > Built on USDC stablecoin payments on the Arc blockchain —
 > settled one stream at a time via the x402 protocol and Circle
