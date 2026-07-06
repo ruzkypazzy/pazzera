@@ -21,26 +21,26 @@ A kid in Lagos drops a beat. A producer in São Paulo adds a verse.
 A singer in Seoul adds the hook. They upload it to the major
 streaming platforms and the math goes like this:
 
-- Spotify pays roughly **$0.003 per stream**.
-- The platform takes its cut (~30%).
-- The label takes its cut (~50%).
+- The per-stream payout is a fraction of a cent.
+- The platform takes its cut.
+- The label — if there is one — takes its cut.
 - The aggregator, the distributor, the payment processor — they
   each take a slice.
 - The royalty check happens **monthly at best, quarterly at worst**.
-- Payouts only fire when you've crossed a **$10–$50 threshold**
-  depending on the platform and country.
-- You can't see who's listening, where, or how often.
-- You can't pay your collaborators without spreadsheets and
-  bank transfers.
+- Payouts only fire when you've crossed a meaningful threshold,
+  and only to a bank account in a country and currency that the
+  platform chooses to support.
+- Onboarding a new collaborator means new paperwork, a new contract,
+  and a new bank transfer workflow.
 - If your track isn't a hit, you earn nothing. The platforms don't
   surface unknowns.
 
-So the kid in Lagos makes a song, gets 4,000 streams in a year, and
-gets a **$8 royalty payment** to a bank account in a country where
-$8 doesn't even cover the cost of the data plan that uploaded the
-song. The producer in São Paulo never gets paid at all because they
-weren't on the legal entity paperwork. The singer in Seoul waits six
-months for the quarterly statement.
+So the kid in Lagos makes a song, gets a few thousand streams in a
+year, and gets a royalty payment so small it doesn't even cover the
+cost of the data plan that uploaded the song. The producer in São
+Paulo never gets paid at all because they weren't on the legal
+entity paperwork. The singer in Seoul waits six months for the
+quarterly statement.
 
 **This is the broken status quo for independent music on the
 internet.** The platforms make their money from ads and
@@ -55,9 +55,7 @@ last and paid least.
 - Upload a song → wait weeks for review → maybe published, maybe
   rejected with no real feedback
 - Earn fractions of a cent per stream, paid months later
-- Can't split royalties to collaborators automatically
-- Can't see who actually listened
-- Pay $10–30/month for "Pro" tools that mostly just gate features
+- Pay a monthly fee for "Pro" tools that mostly just gate features
   you already have on a free tier
 
 **With Pazzera:**
@@ -66,7 +64,6 @@ last and paid least.
   in chat → publish in 60 seconds
 - Earn **0.001–0.005 USDC per stream**, paid the moment a listener
   crosses the 25% threshold
-- Splits go to collaborators **automatically**, atomically, on-chain
 - Every payment is auditable: click a row, see the tx hash, see
   the split breakdown
 - No monthly fees. No "Pro" tier. No lock-in.
@@ -74,12 +71,15 @@ last and paid least.
 #### Collaborators (featured artists, producers, songwriters)
 
 **Before Pazzera:**
-- You collaborated on a hit, but you signed no paperwork. The
-  primary artist uploaded it and you never see a cent.
-- Or: you signed paperwork, but it requires chasing the artist
-  every quarter for a bank transfer.
-- Or: you got paid once, but the song keeps streaming and you don't
-  see the ongoing share.
+- Other platforms offer royalty splits, but the workflow is heavy:
+  contracts, business entities, payment routing through the label
+  or aggregator, and no guarantee the split actually runs every
+  time. If the artist uploads it under their own name, the
+  collaborator's share is whatever the artist's good faith allows.
+- Or: you signed paperwork, but you have to chase the artist every
+  quarter for a bank transfer.
+- Or: you got paid once, but the song keeps streaming and you have
+  to keep asking for the ongoing share.
 
 **With Pazzera:**
 - Get added as a recipient at upload time, with a `@username` and
@@ -93,21 +93,32 @@ last and paid least.
 #### Listeners
 
 **Before Pazzera:**
-- Subscribe to Spotify for $11.99/month, the artist sees $0.002 of
-  that per stream.
-- Buy an NFT for $200 hoping the artist gets most of it (they don't,
-  gas + marketplace cut eats 15–30%).
-- Tip via Venmo/CashApp and hope it doesn't bounce.
+- Subscribe to a streaming service for $10+/month, the artist sees
+  a fraction of a cent of that per stream.
+- Want to support an artist directly? You're stuck with whatever
+  tipping tools the platform offers (usually with a 15–30% cut
+  and clunky checkout), or off-platform apps that don't connect
+  to the stream itself.
 
 **With Pazzera:**
 - Sign up with email, no card, no KYC for listening.
-- Press play. Listen past 25%. **One USDC micro-payment fires** from
-  your Circle Gateway balance straight to the artist.
+- A small starting USDC balance is provisioned to your Pazzera
+  wallet when you sign up — this is what you'll use to pay artists.
+- Press play. Listen past 25%. **One USDC micro-payment fires**
+  from your Pazzera wallet straight to the artist's.
 - The cost? Less than a cent. The signal? "I actually care about
   this song enough to pay for it."
 - You're not "streaming" in the passive sense. You're
-  **micro-tipping** in the active sense, and the cost is invisible
-  because Circle Gateway batches it.
+  **micro-tipping** in the active sense. There is no subscription,
+  no ad break, no algorithmic playlist positioning your song for a
+  cut of the impression.
+
+*Note: Pazzera today is non-custodial in the sense that the USDC
+lives in your Circle wallet, but it's still stablecoin payments
+under the hood. If you've never held crypto before, you'll need
+~10 seconds of orientation on what a USDC balance is and why it
+needs topping up occasionally — we surface that gently in the
+wallet UI, not as a popup.*
 
 #### Labels, distributors, curators (optional intermediaries)
 
@@ -137,9 +148,9 @@ last and paid least.
 5. **AI should handle the boring parts** (metadata, mood tags,
    rate suggestions, royalty splits) **so humans can focus on the
    music.** PAZZERA BOT is the first application of this.
-6. **On-chain doesn't mean crypto-bro.** Circle Gateway + x402
-   abstracts the wallet so listeners don't see gas, addresses, or
-   signing popups. They just sign in with email and listen.
+6. **Crypto UX should get out of the way.** Listeners never see a
+   gas estimate, a signing popup, or a 12-word seed phrase. The
+   artist dashboard shows real numbers, not "0.002 ETH".
 
 ---
 
@@ -176,9 +187,8 @@ bot:
 - Analyzes audio (duration, bitrate, channels, energy, mood from
   ID3 tags) via `music-metadata` + heuristics
 - Captions the cover art via GPT-4o vision
-- Suggests title, description, mood tags, audio quality, **fair
-  per-stream rate (0.001–0.005 USDC, never rejects)** via
-  GPT-4o-mini
+- Suggests title, description, mood tags, audio quality, and a
+  fair per-stream rate (0.001–0.005 USDC) via GPT-4o-mini
 - Resolves Pazzera `@username` recipients against the DB (with
   fuzzy "did you mean?" if there's a prefix match)
 - Drives the LOCKED `/api/songs/create-draft` →
@@ -532,9 +542,13 @@ Gateway abstracts the actual chain movement into batched
 settlements, so the listener's wallet doesn't bleed gas on
 every song.
 
-**2. Listeners need friction-free top-up.** When a listener signs
-up, we deposit a small starting balance to their Circle Gateway
-wallet via the testnet faucet. From then on, every payment is
+**2. Wallets are abstracted but not invisible.** Circle
+Developer-Controlled Wallets handle the signing/key-management
+server-side, so listeners never see a MetaMask popup. On the
+testnet, new accounts are auto-provisioned with a faucet-dripped
+USDC balance so the first stream payment just works. On mainnet,
+the listener will need to top up their own balance — but the top-up
+UI is plain "buy USDC with card", not a 12-word seed-phrase ritual.
 just a balance debit — no on-chain signature on every song.
 The wallet calls (deposit, transfer, balance) all go through
 Circle's Developer-Controlled Wallets API, which is wrapped in
@@ -595,9 +609,12 @@ We picked x402 + Circle Gateway on Arc specifically because:
 1. **Stablecoin-native.** No token volatility. 0.002 USDC is
    0.002 USDC tomorrow and next month. Artists price in cents,
    not vibes.
-2. **Friction-free top-up.** Circle DCW + testnet faucet means a
-   new listener can be paying for streams in 30 seconds, no
-   wallet extension needed.
+2. **Reasonable onboarding.** Circle DCW wallets + testnet
+   faucet means a new listener can be paying for streams in
+   under a minute on testnet, with no seed-phrase backup flow
+   or browser-wallet install. Mainnet will require a top-up
+   step before the balance is spendable; the UI makes that
+   obvious.
 3. **Auditable by default.** Every `TransferWithAuthorization` is
    verifiable on the block explorer. We pin a link in the admin
    dashboard.
@@ -727,7 +744,7 @@ fails loudly if anything is wrong.
 | `CIRCLE_BASE_URL` | `https://api.circle.com` | |
 | `CIRCLE_GATEWAY_FACILITATOR_URL` | `https://gateway-api-testnet.circle.com` | x402 settlement |
 | `CIRCLE_WEBHOOK_SECRET` | — | HMAC-SHA256 for /api/webhooks/circle |
-| `CURATOR_PRICE_MIN_USDC` / `CURATOR_PRICE_MAX_USDC` | `0.001` / `0.005` | curator pricing band (the agent never rejects, always clamps) |
+| `CURATOR_PRICE_MIN_USDC` / `CURATOR_PRICE_MAX_USDC` | `0.001` / `0.005` | curator pricing band |
 | `FAN_AGENT_DURATION_THRESHOLD_PCT` | `25` | payment trigger threshold |
 | `SPLIT_DEFAULT_ARTIST_PCT` etc. | `70` / `20` / `10` | default royalty split |
 | `PAZZERA_WALLET_PROVIDER` | `local-dev` | `local-dev` / `circle-ucw` / `arc-native` |
@@ -903,8 +920,8 @@ curl https://api.pazzera.com/ready
 4. User drops a cover image — saved the same way + sent to OpenAI
    vision as a base64 data URL (we can't auth the LLM to our URLs)
 5. Agent asks LLM to decide `{title, description, moodTags,
-   audioQuality, confidence, reasoning, streamRateUsdc}` (clamped
-   to [0.001, 0.005] USDC; **never rejects**)
+   audioQuality, confidence, reasoning, streamRateUsdc}`
+   (stream rate clamped to [0.001, 0.005] USDC)
 6. User confirms + edits recipients with Pazzera `@username`s
    (agent fuzzy-searches for prefix matches if username not exact)
 7. User clicks **Publish to Pazzera**
@@ -942,23 +959,34 @@ apps/web/components/agent/
 └─ MessageBubble.tsx     # bubble + decision card
 ```
 
-### Key design decisions
+### What you can do with the bot
 
-- **AI Agent never rejects**: stream rate is always clamped to
-  `[0.001, 0.005]`. Even with `LLM_API_KEY` unset, the bot uses
-  deterministic fallbacks so the user can still publish.
-- **Only internal Pazzera splits**: external recipients need a
-  wallet address the chat flow doesn't collect yet. The agent
-  surfaces a clear error if you try.
-- **Empty/0% slots are skipped at commit**: producers or featured
-  artists with 0% don't trigger "Unknown Pazzera user" errors.
-- **Fuzzy recipient search**: typing `ak` suggests
-  `@akinulitosin7` automatically.
-- **Agent chitchat via LLM**: every free-form message routes
-  through `chatText()` with a persona + upload context. You can
-  ask it anything music/payment-related and it answers.
-- **Chat history clears next session**: session is closed on
-  commit (`closedAt` set); the next mount fetches a fresh one.
+- **Just chat.** Ask "what's a fair rate for a chill lo-fi track?",
+  "explain the royalty split like I'm 12", or "what genres are
+  trending right now?" — the bot answers with real context about
+  your upload in progress.
+- **Drop files instead of typing.** Drag an audio file or cover
+  image into the chat at any point. The bot picks up where you
+  left off and refreshes its suggestions based on the new file.
+- **Tag your collaborators by `@username`.** The bot resolves
+  them against the Pazzera user database, with "did you mean…"
+  suggestions when the spelling is close.
+- **Edit anything before publishing.** Title, description, mood
+  tags, recipients, percentages — you see the full draft in the
+  chat and can correct any field before you commit.
+
+### How it stays accurate
+
+- Rate suggestions are clamped to a fair band — the agent
+  won't quote you a number that exploits listeners or
+  shortchanges you.
+- Empty recipient slots and zero-percent splits are filtered
+  out at publish time, so you don't hit "unknown user"
+  errors for fields you left blank.
+- If the LLM provider is unavailable, the bot falls back to
+  deterministic defaults so you can still publish.
+- Each chat session is scoped to one upload. Publishing
+  finishes the session; the next upload starts fresh.
 
 ---
 
